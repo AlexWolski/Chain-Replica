@@ -14,7 +14,11 @@ pub mod chain {
     tonic::include_proto!("chain");
 }
 
+//Libraries
+use std::env;
+use std::io::{Error, ErrorKind};
 use tonic::{transport::Server, Request, Response, Status};
+
 //Head
 use chain::head_chain_replica_server::{HeadChainReplica, HeadChainReplicaServer};
 use chain::{IncRequest, HeadResponse};
@@ -101,6 +105,25 @@ impl Replica for ReplicaService {
 }
 
 
-fn main() {
-    println!("This is the replica");
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let my_addr = "[::1]:50051".parse()?;
+    let args: Vec<String> = env::args().collect();
+
+    if args.len() != 3
+    {
+        println!("Correct Usage: chain_replica.rs ZOOKEEPER_HOST_PORT_LIST CONTROL_PATH");
+        return Err(Error::new(ErrorKind::InvalidInput, "Invalid number of arguments").into());
+    }
+
+    println!("Starting the replica service...");
+
+    let replica_service = ReplicaService::default();
+
+    Server::builder()
+        .add_service(ReplicaServer::new(replica_service))
+        .serve(my_addr)
+        .await?;
+
+    Ok(())
 }
