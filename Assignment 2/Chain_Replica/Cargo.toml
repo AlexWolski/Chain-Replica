@@ -1,5 +1,5 @@
 [package]
-name = "Chain_Replication"
+name = "Chain_Replica"
 version = "0.1.0"
 authors = ["Alex Wolski <wolski.alexander.john@gmail.com>"]
 edition = "2018"
@@ -17,8 +17,3 @@ tonic-build = "0.5.2"
 [[bin]]
 	name = "chain_replica"
 	path = "src/chain_replica.rs"
-
-# Client binary
-[[bin]]
-	name = "chain_client"
-	path = "src/chain_client.rs"
