@@ -9,6 +9,9 @@ import grpc
 import chain_pb2
 import chain_pb2_grpc
 
+import chain_debug_pb2
+import chain_debug_pb2_grpc
+
 zk = None
 base_path = None
 
@@ -61,7 +64,11 @@ def inc(key, increment):
 
 
 @chain_client.command()
-def watch_chain():
+@click.option("--once/--continuous", default=False,
+              help="once causes the chain to just be printed once and then exit")
+@click.option("--znode/--data", default=False,
+              help="show the znode name in the chain or list the host/port and name info")
+def watch_chain(once, znode):
     '''watch the chain for replica changes'''
     # nice! look at this magical annotation that kazoo has!
     @zk.ChildrenWatch(base_path)
@@ -69,14 +76,64 @@ def watch_chain():
         # filter only the replica- znodes and sort them (get_children doesn't return in order)
         childs = sorted([c for c in childs if c.startswith('replica-')])
         if childs:
-            data = [zk.get(zk_full_name(child))[0].decode().replace('\n', '-')[7:30] for child in childs]
+            data = [child if znode else zk.get(zk_full_name(child))[0].decode().replace('\n', '-')[7:35] for child in childs]
             click.echo(f"{Fore.RED}=>{Style.RESET_ALL}".join(data))
         else:
             click.echo(f"{Fore.RED}no chain{Style.RESET_ALL}")
+        if once:
+            exit(0)
 
     # just loop forever. the above function will get invoked whenever the children change
     while True:
         time.sleep(10)
+
+@chain_client.command()
+@click.argument("znode")
+@click.option("--log-limit", default=10, show_default=True,
+              help="the limit of log entries to show from each replica")
+@click.option("--show-data/--no-show-data", default=True, show_default=True,
+              help="show the state of the replica")
+def debug(znode, log_limit, show_data):
+    '''list the debug information for the replica corresponding to the znode.
+       only the number is needed for the znode name. replica-0000 will be auto prepended.
+       if "all" is passed. every znode in the chain will be checked
+    '''
+    if znode == "all":
+        znodes = [child for child in zk.get_children(base_path) if child.startswith("replica-")]
+        znodes.sort()
+    elif not znode.startswith("replica-"):
+        znodes=[f"replica-{int(znode):0>10d}"]
+    else:
+        znodes = [znode]
+
+    for znode in znodes:
+        try:
+            click.echo("--------------------------------")
+            click.echo(f"{Style.BRIGHT}{znode}{Style.RESET_ALL}:")
+            # if znode doesn't start with replica- assume that only the number portion is being passed
+            full_name = zk_full_name(znode)
+            data = zk.get(full_name)[0].decode()
+            click.echo(data)
+            # first line of the data is the grpc host and port
+            hostport = data.split('\n')[0]
+            channel = grpc.insecure_channel(hostport)
+            try:
+                reply = chain_debug_pb2_grpc.ChainDebugStub(channel).debug(chain_debug_pb2.ChainDebugRequest())
+            except grpc._channel._InactiveRpcError as e:
+                click.echo(f"{Fore.RED}{hostport} does not implement the ChainDebug service. {e}|{e.details()}{Style.RESET_ALL}")
+                exit(0)
+            if show_data:
+                click.echo("state:")
+                for key,value in reply.state.items():
+                    click.echo(f"  {key}=>{value}")
+                click.echo(f"xid={reply.xid}")
+                for s in reply.sent:
+                    click.echo(f"  {s}")
+            for log in reply.logs[:log_limit]:
+                click.echo(log)
+        except kazoo.exceptions.NoNodeError:
+            click.echo(f"{Fore.RED}{full_name} does not exist{Style.RESET_ALL}")
+
 
 if __name__ == '__main__':
     chain_client()
