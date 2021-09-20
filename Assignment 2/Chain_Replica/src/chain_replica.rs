@@ -17,7 +17,7 @@ pub mod chain {
 //Libraries
 use std::env;
 use std::io::{Error, ErrorKind};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 use std::collections::HashMap;
 use tonic::{transport::Server, Request, Response, Status};
 
@@ -38,7 +38,7 @@ static SOCKET_ADDRESS : &str = "[::1]:50051";
 
 
 pub struct HeadChainReplicaService {
-    data: Arc<Mutex<HashMap<String, i32>>>
+    data: Arc<RwLock<HashMap<String, i32>>>
 }
 
 #[tonic::async_trait]
@@ -56,7 +56,7 @@ impl HeadChainReplica for HeadChainReplicaService {
 }
 
 pub struct TailChainReplicaService {
-    data: Arc<Mutex<HashMap<String, i32>>>
+    data: Arc<RwLock<HashMap<String, i32>>>
 }
 
 #[tonic::async_trait]
@@ -75,7 +75,7 @@ impl TailChainReplica for TailChainReplicaService {
 }
 
 pub struct ReplicaService {
-    data: Arc<Mutex<HashMap<String, i32>>>
+    data: Arc<RwLock<HashMap<String, i32>>>
 }
 
 #[tonic::async_trait]
@@ -119,7 +119,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
 
     //Shared hashmap protected by a mutex
-    let data = Arc::new(Mutex::new(HashMap::<String, i32>::new()));
+    let data = Arc::new(RwLock::new(HashMap::<String, i32>::new()));
 
     if args.len() != 3
     {
