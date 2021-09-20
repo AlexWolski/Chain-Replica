@@ -17,6 +17,8 @@ pub mod chain {
 //Libraries
 use std::env;
 use std::io::{Error, ErrorKind};
+use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
 use tonic::{transport::Server, Request, Response, Status};
 
 //Head
@@ -35,8 +37,9 @@ use chain::{AckRequest, AckResponse};
 static SOCKET_ADDRESS : &str = "[::1]:50051";
 
 
-#[derive(Default)]
-pub struct HeadChainReplicaService {}
+pub struct HeadChainReplicaService {
+    data: Arc<Mutex<HashMap<String, i32>>>
+}
 
 #[tonic::async_trait]
 impl HeadChainReplica for HeadChainReplicaService {
@@ -52,8 +55,9 @@ impl HeadChainReplica for HeadChainReplicaService {
     }
 }
 
-#[derive(Default)]
-pub struct TailChainReplicaService {}
+pub struct TailChainReplicaService {
+    data: Arc<Mutex<HashMap<String, i32>>>
+}
 
 #[tonic::async_trait]
 impl TailChainReplica for TailChainReplicaService {
@@ -70,8 +74,9 @@ impl TailChainReplica for TailChainReplicaService {
     }
 }
 
-#[derive(Default)]
-pub struct ReplicaService {}
+pub struct ReplicaService {
+    data: Arc<Mutex<HashMap<String, i32>>>
+}
 
 #[tonic::async_trait]
 impl Replica for ReplicaService {
@@ -113,16 +118,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let socket : std::net::SocketAddr = SOCKET_ADDRESS.parse()?;
     let args: Vec<String> = env::args().collect();
 
+    //Shared hashmap protected by a mutex
+    let data = Arc::new(Mutex::new(HashMap::<String, i32>::new()));
+
     if args.len() != 3
     {
         println!("Correct Usage: chain_replica.rs ZOOKEEPER_HOST_PORT_LIST CONTROL_PATH");
         return Err(Error::new(ErrorKind::InvalidInput, "Invalid number of arguments").into());
     }
 
-    let replica_service = ReplicaService::default();
-    let head_service = HeadChainReplicaService::default();
-    let tail_service = TailChainReplicaService::default();
+    //Instantiate services with the shared data
+    let replica_service = ReplicaService { data: data.clone() };
+    let head_service = HeadChainReplicaService { data: data.clone() };
+    let tail_service = TailChainReplicaService { data: data.clone() };
 
+    //Create servers to run the services
     let replica_server = Server::builder().add_service(ReplicaServer::new(replica_service));
     let head_server = Server::builder().add_service(HeadChainReplicaServer::new(head_service));
     let tail_server = Server::builder().add_service(TailChainReplicaServer::new(tail_service));
