@@ -38,8 +38,6 @@ use chain::{AckRequest, AckResponse};
 static SOCKET_ADDRESS : &str = "[::1]:50051";
 //Name of the author
 static NAME : &str = "Alex Wolski";
-//Path to the replica zNode
-static ZNODE_PATH : &str = "/demo/replica-";
 
 
 pub struct HeadChainReplicaService {
@@ -144,13 +142,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //Handle a connection error
     match connect_result {
         Ok(_) => (),
-        Err(_) => return Err(Error::new(ErrorKind::ConnectionRefused, format!("Unable to connect to: {}", args[1])).into())
+        Err(_) => return Err(Error::new(ErrorKind::ConnectionRefused,
+            format!("Unable to connect to ZooKeeper Instance at: {}", args[1])).into())
     };
 
     let zk_instance = connect_result.unwrap();
     let znode_data = format!("{}\n{}", SOCKET_ADDRESS, NAME);
 
-    let create_result = zk_instance.create(ZNODE_PATH,
+    let create_result = zk_instance.create(&args[2],
         znode_data.as_bytes().to_vec(),
         Acl::open_unsafe().clone(),
         CreateMode::EphemeralSequential);
@@ -158,7 +157,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //Handle a creation error
     match create_result {
         Ok(_) => (),
-        Err(_) => return Err(Error::new(ErrorKind::InvalidData, format!("Unable to create a znode: {}", args[1])).into())
+        Err(_) => return Err(Error::new(ErrorKind::InvalidData,
+            format!("Unable to create the znode: {}", args[2])).into())
     };
 
     println!("Successfully created zNode: {}", create_result.unwrap());
