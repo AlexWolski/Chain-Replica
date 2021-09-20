@@ -122,6 +122,10 @@ impl Watcher for LoggingWatcher {
     }
 }
 
+fn conn_listener(state: zookeeper::ZkState) {
+    println!("New ZkState is {:?}", state);
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let socket : std::net::SocketAddr = SOCKET_ADDRESS.parse()?;
@@ -137,16 +141,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     //Connecting to ZooKeeper
-    let connect_result = ZooKeeper::connect(&args[1], std::time::Duration::from_secs(15), LoggingWatcher);
+    let connect_result = ZooKeeper::connect(&args[1], std::time::Duration::from_secs(5), LoggingWatcher);
 
     //Handle a connection error
     match connect_result {
-        Ok(_) => (),
-        Err(_) => return Err(Error::new(ErrorKind::ConnectionRefused,
-            format!("Unable to connect to ZooKeeper Instance at: {}", args[1])).into())
+        Ok(_) => println!("Connecting to master: '{}'...", args[1]),
+        Err(_) => return Err(Error::new(ErrorKind::InvalidInput,
+            format!("The host list '{}' is not valid.", args[1])).into())
     };
 
     let zk_instance = connect_result.unwrap();
+    zk_instance.add_listener(conn_listener);
     let znode_data = format!("{}\n{}", SOCKET_ADDRESS, NAME);
 
     let create_result = zk_instance.create(&args[2],
@@ -173,7 +178,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let head_server = Server::builder().add_service(HeadChainReplicaServer::new(head_service));
     let tail_server = Server::builder().add_service(TailChainReplicaServer::new(tail_service));
 
-    println!("Starting the replica service...");
+    println!("Creating replica service");
     replica_server.serve(socket).await?;
 
     Ok(())
