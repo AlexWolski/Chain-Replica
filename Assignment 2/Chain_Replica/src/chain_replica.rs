@@ -20,6 +20,7 @@ use std::io::{Error, ErrorKind};
 use std::sync::{Arc, RwLock};
 use std::collections::HashMap;
 use tonic::{transport::Server, Request, Response, Status};
+use zookeeper::{Acl, CreateMode, Watcher, WatchedEvent, ZooKeeper};
 
 //Head
 use chain::head_chain_replica_server::{HeadChainReplica, HeadChainReplicaServer};
@@ -35,6 +36,10 @@ use chain::{AckRequest, AckResponse};
 
 //The port all services will run on
 static SOCKET_ADDRESS : &str = "[::1]:50051";
+//Name of the author
+static NAME : &str = "Alex Wolski";
+//Path to the replica zNode
+static ZNODE_PATH : &str = "/demo/replica-";
 
 
 pub struct HeadChainReplicaService {
@@ -112,6 +117,12 @@ impl Replica for ReplicaService {
     }
 }
 
+struct LoggingWatcher;
+impl Watcher for LoggingWatcher {
+    fn handle(&self, e: WatchedEvent) {
+        println!("Disconnected from ZooKeeper: {:?}", e)
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -126,6 +137,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Correct Usage: chain_replica.rs ZOOKEEPER_HOST_PORT_LIST CONTROL_PATH");
         return Err(Error::new(ErrorKind::InvalidInput, "Invalid number of arguments").into());
     }
+
+    //Connecting to ZooKeeper
+    let connect_result = ZooKeeper::connect(&args[1], std::time::Duration::from_secs(15), LoggingWatcher);
+
+    //Handle a connection error
+    match connect_result {
+        Ok(_) => (),
+        Err(_) => return Err(Error::new(ErrorKind::ConnectionRefused, format!("Unable to connect to: {}", args[1])).into())
+    };
+
+    let zk_instance = connect_result.unwrap();
+    let znode_data = format!("{}\n{}", SOCKET_ADDRESS, NAME);
+
+    let create_result = zk_instance.create(ZNODE_PATH,
+        znode_data.as_bytes().to_vec(),
+        Acl::open_unsafe().clone(),
+        CreateMode::EphemeralSequential);
+
+    //Handle a creation error
+    match create_result {
+        Ok(_) => (),
+        Err(_) => return Err(Error::new(ErrorKind::InvalidData, format!("Unable to create a znode: {}", args[1])).into())
+    };
+
+    println!("Successfully created zNode: {}", create_result.unwrap());
 
     //Instantiate services with the shared data
     let replica_service = ReplicaService { data: data.clone() };
