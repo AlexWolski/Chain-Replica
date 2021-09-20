@@ -31,6 +31,9 @@ use chain::{UpdateRequest, UpdateResponse};
 use chain::{StateTransferRequest, StateTransferResponse};
 use chain::{AckRequest, AckResponse};
 
+//The port all services will run on
+static SOCKET_ADDRESS : &str = "[::1]:50051";
+
 
 #[derive(Default)]
 pub struct HeadChainReplicaService {}
@@ -107,7 +110,7 @@ impl Replica for ReplicaService {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let my_addr = "[::1]:50051".parse()?;
+    let socket : std::net::SocketAddr = SOCKET_ADDRESS.parse()?;
     let args: Vec<String> = env::args().collect();
 
     if args.len() != 3
@@ -116,14 +119,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err(Error::new(ErrorKind::InvalidInput, "Invalid number of arguments").into());
     }
 
-    println!("Starting the replica service...");
-
     let replica_service = ReplicaService::default();
+    let head_service = HeadChainReplicaService::default();
+    let tail_service = TailChainReplicaService::default();
 
-    Server::builder()
-        .add_service(ReplicaServer::new(replica_service))
-        .serve(my_addr)
-        .await?;
+    let replica_server = Server::builder().add_service(ReplicaServer::new(replica_service));
+    let head_server = Server::builder().add_service(HeadChainReplicaServer::new(head_service));
+    let tail_server = Server::builder().add_service(TailChainReplicaServer::new(tail_service));
+
+    println!("Starting the replica service...");
+    replica_server.serve(socket).await?;
 
     Ok(())
 }
