@@ -20,7 +20,7 @@ use std::io::{Error, ErrorKind};
 use std::sync::{Arc, RwLock};
 use std::collections::HashMap;
 use tonic::{transport::Server, Request, Response, Status};
-use zookeeper::{Acl, CreateMode, Watcher, WatchedEvent, ZooKeeper};
+use zookeeper::{Acl, CreateMode, Watcher, WatchedEvent, ZooKeeper, ZkState};
 
 //Head
 use chain::head_chain_replica_server::{HeadChainReplica, HeadChainReplicaServer};
@@ -115,62 +115,73 @@ impl Replica for ReplicaService {
     }
 }
 
-pub struct ZooKeeperClient {
-    zk_instance: zookeeper::ZooKeeper,
-}
 
-impl ZooKeeperClient {
-    fn conn_listener(state: zookeeper::ZkState) {
-        println!("New ZkState is {:?}", state);
+mod ZkManager {
+    use super::*;
+
+    //Required for creating a connection, but not used
+    struct NoopWatcher;
+    impl Watcher for NoopWatcher {
+        fn handle(&self, _event: WatchedEvent) {}
     }
 
-    fn connect(host_list: &str, timeout: u64)
-    -> Result<ZooKeeperClient, Box<dyn std::error::Error>> {
-        struct LoggingWatcher;
-        impl Watcher for LoggingWatcher {
-            fn handle(&self, e: WatchedEvent) {
-                println!("Disconnected from ZooKeeper: {:?}", e)
+    pub struct ZkClient {
+        zk_instance: zookeeper::ZooKeeper,
+    }
+
+    impl ZkClient {
+        //Listens for changes in the connection
+        fn conn_listener(state: ZkState) {
+            match state {
+                ZkState::Connected | ZkState::ConnectedReadOnly =>
+                    println!("Connected to ZooKeeper host"),
+                ZkState::Closed =>
+                    println!("Disconnected from ZooKeeper host"),
+                _ => (),
             }
         }
 
-        //Connecting to ZooKeeper
-        let connect_result = ZooKeeper::connect(
-            host_list,
-            std::time::Duration::from_secs(timeout),
-            LoggingWatcher);
+        pub fn connect(host_list: &str, timeout: u64)
+        -> Result<ZkClient, Box<dyn std::error::Error>> {
+            //Connecting to ZooKeeper
+            let connect_result = ZooKeeper::connect(
+                host_list,
+                std::time::Duration::from_secs(timeout),
+                ZkManager::NoopWatcher);
 
-        //Handle a connection error
-        match connect_result {
-            Ok(_) => println!("Connecting to master: '{}'...", host_list),
-            Err(_) => return Err(Error::new(ErrorKind::InvalidInput,
-                format!("The host list '{}' is not valid.", host_list)).into())
-        };
+            //Handle a connection error
+            match connect_result {
+                Ok(_) => println!("Connecting to ZooKeeper host: '{}'...", host_list),
+                Err(_) => return Err(Error::new(ErrorKind::InvalidInput,
+                    format!("The host list '{}' is not valid.", host_list)).into())
+            };
 
-        let instance = connect_result.unwrap();
-        instance.add_listener(ZooKeeperClient::conn_listener);
+            let instance = connect_result.unwrap();
+            instance.add_listener(ZkClient::conn_listener);
 
-        Ok(ZooKeeperClient {
-            zk_instance: instance,
-        })
-    }
+            Ok(ZkClient {
+                zk_instance: instance,
+            })
+        }
 
-    fn create(&self, path: &str, znode_data: &str, create_mode: CreateMode)
-    -> Result<(), Box<dyn std::error::Error>> {
-        let create_result = self.zk_instance.create(path,
-            znode_data.as_bytes().to_vec(),
-            Acl::open_unsafe().clone(),
-            create_mode);
+        pub fn create(&self, path: &str, znode_data: &str, create_mode: CreateMode)
+        -> Result<(), Box<dyn std::error::Error>> {
+            let create_result = self.zk_instance.create(path,
+                znode_data.as_bytes().to_vec(),
+                Acl::open_unsafe().clone(),
+                create_mode);
 
-        //Handle a creation error
-        match create_result {
-            Ok(_) => (),
-            Err(_) => return Err(Error::new(ErrorKind::InvalidData,
-                format!("Unable to create the znode: {}", path)).into())
-        };
+            //Handle a creation error
+            match create_result {
+                Ok(_) => (),
+                Err(_) => return Err(Error::new(ErrorKind::InvalidData,
+                    format!("Unable to create the znode: {}", path)).into())
+            };
 
-        println!("Successfully created zNode: {}", create_result.unwrap());
+            println!("Successfully created zNode: {}", create_result.unwrap());
 
-        Ok(())
+            Ok(())
+        }
     }
 }
 
@@ -190,7 +201,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let znode_data = format!("{}\n{}", SOCKET_ADDRESS, NAME);
-    let zk_client = ZooKeeperClient::connect(&args[1], 5)?;
+    let zk_client = ZkManager::ZkClient::connect(&args[1], 5)?;
     zk_client.create(&args[2], &znode_data, CreateMode::EphemeralSequential)?;
 
     //Instantiate services with the shared data
