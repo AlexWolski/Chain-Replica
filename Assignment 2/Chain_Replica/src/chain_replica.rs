@@ -19,7 +19,8 @@ use std::env;
 use std::io::{Error, ErrorKind};
 use std::sync::{Arc, RwLock};
 use std::collections::HashMap;
-use tonic::{transport::Server, Request, Response, Status};
+use std::net::SocketAddr;
+use tonic::{transport::Server, transport::server, Request, Response, Status};
 use zookeeper::{Acl, CreateMode, Watcher, WatchedEvent, ZooKeeper, ZkState};
 
 //Head
@@ -40,6 +41,11 @@ static SOCKET_ADDRESS : &str = "[::1]:50051";
 static NAME : &str = "Alex Wolski";
 
 
+#[tonic::async_trait]
+pub trait GRpcServer {
+    async fn start(self, socket : SocketAddr) -> Result<(), Box<dyn std::error::Error>>;
+}
+
 pub struct HeadChainReplicaService {
     data: Arc<RwLock<HashMap<String, i32>>>
 }
@@ -57,6 +63,31 @@ impl HeadChainReplica for HeadChainReplicaService {
         Ok(Response::new(head_response))
     }
 }
+
+pub struct HeadServerManager {
+    server: server::Router<HeadChainReplicaServer<HeadChainReplicaService>, server::Unimplemented>,
+}
+
+impl HeadServerManager {
+    pub fn new(data: Arc<RwLock<HashMap<String, i32>>>)
+    -> Result<HeadServerManager, Box<dyn std::error::Error>> {
+        let head_service = HeadChainReplicaService { data: data };
+        let head_server = Server::builder().add_service(HeadChainReplicaServer::new(head_service));
+
+        Ok(HeadServerManager {
+            server: head_server,
+        })
+    }
+}
+
+#[tonic::async_trait]
+impl GRpcServer for HeadServerManager {
+    async fn start(self, socket : SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
+        self.server.serve(socket).await?;
+        Ok(())
+    }
+}
+
 
 pub struct TailChainReplicaService {
     data: Arc<RwLock<HashMap<String, i32>>>
@@ -76,6 +107,32 @@ impl TailChainReplica for TailChainReplicaService {
         Ok(Response::new(tail_response))
     }
 }
+
+
+pub struct TailServerManager {
+    server: server::Router<TailChainReplicaServer<TailChainReplicaService>, server::Unimplemented>,
+}
+
+impl TailServerManager {
+    pub fn new(data: Arc<RwLock<HashMap<String, i32>>>)
+    -> Result<TailServerManager, Box<dyn std::error::Error>> {
+        let tail_service = TailChainReplicaService { data: data };
+        let tail_server = Server::builder().add_service(TailChainReplicaServer::new(tail_service));
+
+        Ok(TailServerManager {
+            server: tail_server,
+        })
+    }
+}
+
+#[tonic::async_trait]
+impl GRpcServer for TailServerManager {
+    async fn start(self, socket : SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
+        self.server.serve(socket).await?;
+        Ok(())
+    }
+}
+
 
 pub struct ReplicaService {
     data: Arc<RwLock<HashMap<String, i32>>>
@@ -115,8 +172,32 @@ impl Replica for ReplicaService {
     }
 }
 
+pub struct ReplicaServerManager {
+    server: server::Router<ReplicaServer<ReplicaService>, server::Unimplemented>,
+}
 
-mod ZkManager {
+impl ReplicaServerManager {
+    pub fn new(data: Arc<RwLock<HashMap<String, i32>>>)
+    -> Result<ReplicaServerManager, Box<dyn std::error::Error>> {
+        let replica_service = ReplicaService { data: data };
+        let replica_server = Server::builder().add_service(ReplicaServer::new(replica_service));
+
+        Ok(ReplicaServerManager {
+            server: replica_server,
+        })
+    }
+}
+
+#[tonic::async_trait]
+impl GRpcServer for ReplicaServerManager {
+    async fn start(self, socket : SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
+        self.server.serve(socket).await?;
+        Ok(())
+    }
+}
+
+
+mod zk_manager {
     use super::*;
 
     //Required for creating a connection, but not used
@@ -147,7 +228,7 @@ mod ZkManager {
             let connect_result = ZooKeeper::connect(
                 host_list,
                 std::time::Duration::from_secs(timeout),
-                ZkManager::NoopWatcher);
+                zk_manager::NoopWatcher);
 
             //Handle a connection error
             match connect_result {
@@ -188,7 +269,7 @@ mod ZkManager {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let socket : std::net::SocketAddr = SOCKET_ADDRESS.parse()?;
+    let socket : SocketAddr = SOCKET_ADDRESS.parse()?;
     let args: Vec<String> = env::args().collect();
 
     //Shared hashmap protected by a mutex
@@ -201,21 +282,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let znode_data = format!("{}\n{}", SOCKET_ADDRESS, NAME);
-    let zk_client = ZkManager::ZkClient::connect(&args[1], 5)?;
+    let zk_client = zk_manager::ZkClient::connect(&args[1], 5)?;
     zk_client.create(&args[2], &znode_data, CreateMode::EphemeralSequential)?;
 
-    //Instantiate services with the shared data
-    let replica_service = ReplicaService { data: data.clone() };
-    let head_service = HeadChainReplicaService { data: data.clone() };
-    let tail_service = TailChainReplicaService { data: data.clone() };
+    println!("Creating services");
+    let head_server = HeadServerManager::new(data.clone())?;
+    head_server.start(socket.clone());
+    let tail_server = TailServerManager::new(data.clone())?;
+    tail_server.start(socket.clone());
+    let replica_server = ReplicaServerManager::new(data.clone())?;
+    replica_server.start(socket.clone());
 
-    //Create servers to run the services
-    let replica_server = Server::builder().add_service(ReplicaServer::new(replica_service));
-    let head_server = Server::builder().add_service(HeadChainReplicaServer::new(head_service));
-    let tail_server = Server::builder().add_service(TailChainReplicaServer::new(tail_service));
+    loop {
 
-    println!("Creating replica service");
-    replica_server.serve(socket).await?;
+    }
 
     Ok(())
 }
