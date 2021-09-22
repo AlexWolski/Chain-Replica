@@ -75,13 +75,24 @@ pub struct HeadChainReplicaService {
 impl HeadChainReplica for HeadChainReplicaService {
     async fn increment(&self, request: Request<IncRequest>) ->
     Result<Response<HeadResponse>, Status> {
-        println!("Received Inc Request. Key: {}, Value: {}", request.get_ref().key, request.get_ref().inc_value);
+        //Get the guard from the active variable
+        match self.active.read() {
+            //Read succeeded
+            Ok(active_guard) => {
+                if *active_guard {
+                    println!("Received Inc Request. Key: {}, Value: {}", request.get_ref().key, request.get_ref().inc_value);
+                    let head_response = chain::HeadResponse { rc: 0 };
+                    Ok(Response::new(head_response))
+                }
+                else {
+                    let head_response = chain::HeadResponse { rc: 1 };
+                    Ok(Response::new(head_response))
+                }
+            }
 
-        let head_response = chain::HeadResponse {
-            rc: 0
-        };
-
-        Ok(Response::new(head_response))
+            //Read failed
+            _ => panic!("Failed to read 'active' of HeadChainReplica.")
+        }
     }
 }
 
@@ -152,14 +163,30 @@ pub struct TailChainReplicaService {
 impl TailChainReplica for TailChainReplicaService {
     async fn get(&self, request: Request<GetRequest>) ->
     Result<Response<GetResponse>, Status> {
-        println!("Received Get Request. Key: {}", request.get_ref().key);
 
-        let tail_response = chain::GetResponse {
-            rc: 0,
-            value: 0
-        };
+    	//Get the guard from the active variable
+        match self.active.read() {
+        	//Read succeeded
+            Ok(active_guard) => {
+                if *active_guard {
+                    println!("Received Get Request. Key: {}", request.get_ref().key);
 
-        Ok(Response::new(tail_response))
+                    let tail_response = chain::GetResponse {
+                        rc: 0,
+                        value: 0,
+                    };
+
+                    Ok(Response::new(tail_response))
+                }
+                else {
+                    let tail_response = chain::GetResponse { rc: 1, value : 0 };
+                    Ok(Response::new(tail_response))
+                }
+            }
+
+            //Read failed
+            _ => panic!("Failed to read 'active' of HeadChainReplica.")
+        }
     }
 }
 
@@ -585,11 +612,11 @@ mod replica_manager {
 
             //Create the shared data for the servers
             let shared_data = Arc::new(replica_data{
-            	database: Arc::new(RwLock::new(HashMap::<String, i32>::new())),
-            	sent: Arc::new(RwLock::new(Vec::<(String, i32, u32)>::new())),
-            	ack: Arc::new(RwLock::new(Vec::<u32>::new())),
-            	pred_addr: Arc::new(RwLock::new(Option::<String>::None)),
-            	succ_addr: Arc::new(RwLock::new(Option::<String>::None)),
+                database: Arc::new(RwLock::new(HashMap::<String, i32>::new())),
+                sent: Arc::new(RwLock::new(Vec::<(String, i32, u32)>::new())),
+                ack: Arc::new(RwLock::new(Vec::<u32>::new())),
+                pred_addr: Arc::new(RwLock::new(Option::<String>::None)),
+                succ_addr: Arc::new(RwLock::new(Option::<String>::None)),
             });
 
             //Server status info
@@ -598,7 +625,7 @@ mod replica_manager {
             let replica_active =Arc::new(RwLock::new(false));
 
             Ok(Replica{
-            	//ZooKeeper data
+                //ZooKeeper data
                 zk_instance: instance,
                 socket: socket,
                 base_path: base_path.to_string(),
