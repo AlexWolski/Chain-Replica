@@ -37,9 +37,11 @@ use chain::{StateTransferRequest, StateTransferResponse};
 use chain::{AckRequest, AckResponse};
 
 //The port all services will run on
-static SOCKET_ADDRESS : &str = "[::1]:50051";
+static SOCKET_ADDRESS: &str = "[::1]:50051";
 //Name of the author
-static NAME : &str = "Alex Wolski";
+static NAME: &str = "Alex Wolski";
+//The znode name prefix for all replicas
+static ZNODE_PREFIX: &str = "replica-";
 
 
 #[tonic::async_trait]
@@ -283,9 +285,11 @@ mod zk_manager {
             })
         }
 
-        pub fn create(&self, path: &str, znode_data: &str, create_mode: CreateMode)
+        pub fn create(&self, control_path: &str, znode_data: &str, create_mode: CreateMode)
         -> Result<(), Box<dyn std::error::Error>> {
-            let create_result = self.zk_instance.create(path,
+            let znode_path = format!("{}/{}", control_path, ZNODE_PREFIX);
+
+            let create_result = self.zk_instance.create(&znode_path,
                 znode_data.as_bytes().to_vec(),
                 Acl::open_unsafe().clone(),
                 create_mode);
@@ -294,7 +298,7 @@ mod zk_manager {
             match create_result {
                 Ok(_) => (),
                 Err(_) => return Err(Error::new(ErrorKind::InvalidData,
-                    format!("Unable to create the znode: {}", path)).into())
+                    format!("Unable to create the znode: {}", &znode_path)).into())
             };
 
             println!("Successfully created zNode: {}", create_result.unwrap());
