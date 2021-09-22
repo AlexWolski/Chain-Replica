@@ -40,6 +40,8 @@ use chain::{AckRequest, AckResponse};
 static SOCKET_ADDRESS: &str = "[::1]:50051";
 //Name of the author
 static NAME: &str = "Alex Wolski";
+//The delimiting character separating the address and name in the znode data
+static ZNODE_DELIM: &str = "\n";
 //The znode name prefix for all replicas
 static ZNODE_PREFIX: &str = "replica-";
 //The length of the sequence number ZooKeeper adds to znodes
@@ -373,8 +375,51 @@ mod replica_manager {
             }
         }
 
+        fn get_replica_addr(znode_data: &str) -> Result<String, Box<dyn std::error::Error>> {
+            let mut znode_data_str = znode_data.to_string();
+            let result = znode_data_str.find(ZNODE_DELIM);
+
+            match result {
+                Some(position) => {
+                    if position == 0 {
+                        return Err(Error::new(ErrorKind::Other,
+                            format!("znode data is missing an address")).into())
+                    }
+                },
+                None => return Err(Error::new(ErrorKind::Other,
+                    format!("znode data '{}' is formatted incorrectly", znode_data)).into())
+            }
+
+            let delim_pos = result.unwrap() - 1;
+            //Split the address into znode_data_str 
+            let name = znode_data_str.split_off(delim_pos);
+
+            Ok(znode_data_str)
+        }
+
         //Checks if this replica is the head, assuming ZooKeeper orders the znode list from newest to oldest
         fn is_head(&self) -> Result<bool, Box<dyn std::error::Error>> {
+            //Get all children of the base node
+            let result = self.zk_instance.get_children(&self.base_path, false);
+
+            //Handle a connection error
+            match result {
+                Ok(_) => (),
+                Err(_) => return Err(Error::new(ErrorKind::Other, format!("Failed to get children: {}", &self.base_path)).into())
+            };
+
+            let replica_list = result.as_ref().unwrap();
+            let first_replica_id = Replica::get_replica_id(&replica_list[0])?;
+
+            if first_replica_id == self.replica_id {
+                Ok(true)
+            }
+            else {
+                Ok(false)
+            }
+        }
+                //Checks if this replica is the tail, assuming ZooKeeper orders the znode list from newest to oldest
+        fn is_tail(&self) -> Result<bool, Box<dyn std::error::Error>> {
             //Get all children of the base node
             let result = self.zk_instance.get_children(&self.base_path, false);
 
@@ -396,8 +441,7 @@ mod replica_manager {
             }
         }
 
-        //Checks if this replica is the tail, assuming ZooKeeper orders the znode list from newest to oldest
-        fn is_tail(&self) -> Result<bool, Box<dyn std::error::Error>> {
+        fn get_pred(&self) -> Result<Option<String>, Box<dyn std::error::Error>> {
             //Get all children of the base node
             let result = self.zk_instance.get_children(&self.base_path, false);
 
@@ -408,17 +452,31 @@ mod replica_manager {
             };
 
             let replica_list = result.as_ref().unwrap();
-            let first_replica_id = Replica::get_replica_id(&replica_list[0])?;
+            let mut replica_index = 0;
 
-            if first_replica_id == self.replica_id {
-                Ok(true)
+            for replica in replica_list.iter() {
+                let curr_replica_id = Replica::get_replica_id(&replica)?;
+
+                if curr_replica_id == self.replica_id {
+                    //The replica is the head
+                    if replica_index == 0 {
+                        return Ok(None);
+                    }
+                    //Return the predecessor
+                    else {
+                        return Ok(Some(replica_list[replica_index - 1].to_owned()));
+                    }
+                }
+
+                replica_index += 1;
             }
-            else {
-                Ok(false)
-            }
+
+            //There is an issue with the replica list
+            Err(Error::new(ErrorKind::Other, format!("Invalid chain position: {}", replica_index)).into())
         }
 
-        fn get_pred(&self) -> Result<Option<String>, Box<dyn std::error::Error>> {
+
+        fn get_succ(&self) -> Result<Option<String>, Box<dyn std::error::Error>> {
             //Get all children of the base node
             let result = self.zk_instance.get_children(&self.base_path, false);
 
@@ -436,7 +494,7 @@ mod replica_manager {
                 let curr_replica_id = Replica::get_replica_id(&replica)?;
 
                 if curr_replica_id == self.replica_id {
-                    //The replica is the head
+                    //The replica is the tail
                     if replica_index == last_index {
                         return Ok(None);
                     }
@@ -453,44 +511,13 @@ mod replica_manager {
             Err(Error::new(ErrorKind::Other, format!("Invalid chain position: {}", replica_index)).into())
         }
 
-        fn get_succ(&self) -> Result<Option<String>, Box<dyn std::error::Error>> {
-            //Get all children of the base node
-            let result = self.zk_instance.get_children(&self.base_path, false);
 
-            //Handle a connection error
-            match result {
-                Ok(_) => (),
-                Err(_) => return Err(Error::new(ErrorKind::Other, format!("Failed to get children: {}", &self.base_path)).into())
-            };
-
-            let replica_list = result.as_ref().unwrap();
-            let mut replica_index = 0;
-
-            for replica in replica_list.iter() {
-                let curr_replica_id = Replica::get_replica_id(&replica)?;
-
-                if curr_replica_id == self.replica_id {
-                    //The replica is the tail
-                    if replica_index == 0 {
-                        return Ok(None);
-                    }
-                    //Return the predecessor
-                    else {
-                        return Ok(Some(replica_list[replica_index - 1].to_owned()));
-                    }
-                }
-
-                replica_index += 1;
-            }
-
-            //There is an issue with the replica list
-            Err(Error::new(ErrorKind::Other, format!("Invalid chain position: {}", replica_index)).into())
-        }
-
-        pub fn new(host_list: &str, base_path: &str, znode_data: &str, socket: SocketAddr)
+        pub fn new(host_list: &str, base_path: &str, socket: SocketAddr)
         -> Result<Replica, Box<dyn std::error::Error>> {
             //Construct the replica znode path (before the sequence number is added)
             let znode_path = format!("{}/{}", base_path, ZNODE_PREFIX);
+            //Construct the contents of the znode
+            let znode_data = format!("{}{}{}", SOCKET_ADDRESS, ZNODE_DELIM, NAME);
 
             //Connect to the ZooKeeper host
             let mut instance = zk_manager::connect(host_list, Replica::print_conn_state, 5)?;
@@ -532,7 +559,32 @@ mod replica_manager {
                 self.tail_server.start(self.socket.clone())?;
             }
 
-            Ok(())
+            let pred = self.get_pred()?;
+
+            match pred {
+                Some(pred_znode) => {
+                    let full_path = format!("{}/{}", self.base_path, pred_znode);
+                    let result = self.zk_instance.get_data(&full_path, false);
+
+                    match result {
+                        Ok(node_data) => {
+                            let data_str = String::from_utf8(node_data.0)?;
+                            let address = Replica::get_replica_addr(&data_str)?;
+
+                            println!("pred address: {}", address);
+                            Ok(())
+                        }
+                        _ => {
+                            println!("znode '{}' contains no data", full_path);
+                            Ok(())
+                        }
+                    }
+                }
+                _ => {
+                    println!("No pred");
+                    Ok(())
+                }
+            }
         }
     }
 }
@@ -549,9 +601,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err(Error::new(ErrorKind::InvalidInput, "Invalid number of arguments").into());
     }
 
-    let znode_data = format!("{}\n{}", SOCKET_ADDRESS, NAME);
-    let mut replica = replica_manager::Replica::new(&args[1], &args[2], &znode_data, socket)?;
+    let mut replica = replica_manager::Replica::new(&args[1], &args[2], socket)?;
     replica.start()?;
+
+    loop{}
 
     Ok(())
 }
