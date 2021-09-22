@@ -91,7 +91,7 @@ impl GRpcServer for HeadServerManager {
         let head_service = HeadChainReplicaService { data: self.data.clone() };
         let mut head_server = Server::builder().add_service(HeadChainReplicaServer::new(head_service));
 
-        &self.join_handle.insert(tokio::spawn(async move {
+        self.join_handle.insert(tokio::spawn(async move {
             head_server.serve(socket).await;
         }));
 
@@ -148,7 +148,7 @@ impl GRpcServer for TailServerManager {
         let tail_service = TailChainReplicaService { data: self.data.clone() };
         let mut tail_server = Server::builder().add_service(TailChainReplicaServer::new(tail_service));
 
-        &self.join_handle.insert(tokio::spawn(async move {
+        self.join_handle.insert(tokio::spawn(async move {
             tail_server.serve(socket).await;
         }));
 
@@ -223,7 +223,7 @@ impl GRpcServer for ReplicaServerManager {
         let replica_service = ReplicaService { data: self.data.clone() };
         let mut replica_server = Server::builder().add_service(ReplicaServer::new(replica_service));
 
-        &self.join_handle.insert(tokio::spawn(async move {
+        self.join_handle.insert(tokio::spawn(async move {
             replica_server.serve(socket).await;
         }));
 
@@ -318,18 +318,62 @@ mod replica_manager {
         }
 
         //Returns the sequence number of a replica znode
-        fn get_replica_id(znode: String) -> Result<u32, Box<dyn std::error::Error>> {
-            let mut copy = znode.clone();
+        fn get_replica_id(znode: &str) -> Result<u32, Box<dyn std::error::Error>> {
+            let mut znode_str = znode.to_string();
             //Find the starting posiiton of the znode sequence
-            let split_point = copy.len() - (SEQUENCE_LEN as usize);
-            let id_string = copy.split_off(split_point);
-
+            let split_point = znode_str.len() - (SEQUENCE_LEN as usize);
+            let id_string = znode_str.split_off(split_point);
             let replica_id = id_string.parse::<u32>();
 
             match replica_id {
                 Ok(id) => Ok(id),
                 _ => return Err(Error::new(ErrorKind::Other,
                     format!("znode sequence '{}' is formatted incorrectly", id_string)).into())
+            }
+        }
+
+        //Checks if this replica is the head, assuming ZooKeeper orders the znode list from newest to oldest
+        fn is_head(&self) -> Result<bool, Box<dyn std::error::Error>> {
+            //Get all children of the base node
+            let result = self.zk_instance.get_children(&self.base_path, false);
+
+            //Handle a connection error
+            match result {
+                Ok(_) => (),
+                Err(_) => return Err(Error::new(ErrorKind::Other, format!("Failed to get children: {}", &self.base_path)).into())
+            };
+
+            let replica_list = result.as_ref().unwrap();
+            let last_index = replica_list.len() - 1;
+            let last_replica_id = Replica::get_replica_id(&replica_list[last_index])?;
+
+            if last_replica_id == self.replica_id {
+                Ok(true)
+            }
+            else {
+                Ok(false)
+            }
+        }
+
+        //Checks if this replica is the tail, assuming ZooKeeper orders the znode list from newest to oldest
+        fn is_tail(&self) -> Result<bool, Box<dyn std::error::Error>> {
+            //Get all children of the base node
+            let result = self.zk_instance.get_children(&self.base_path, false);
+
+            //Handle a connection error
+            match result {
+                Ok(_) => (),
+                Err(_) => return Err(Error::new(ErrorKind::Other, format!("Failed to get children: {}", &self.base_path)).into())
+            };
+
+            let replica_list = result.as_ref().unwrap();
+            let first_replica_id = Replica::get_replica_id(&replica_list[0])?;
+
+            if first_replica_id == self.replica_id {
+                Ok(true)
+            }
+            else {
+                Ok(false)
             }
         }
 
@@ -348,18 +392,33 @@ mod replica_manager {
             let mut tail_server = TailServerManager::new(replica_data.clone())?;
             let mut replica_server = ReplicaServerManager::new(replica_data.clone())?;
 
-            //The replica service should always be running
-            replica_server.start(socket)?;
-
             Ok(Replica{
                 zk_instance: instance,
                 socket: socket,
                 base_path: base_path.to_string(),
-                replica_id: Replica::get_replica_id(znode)?,
+                replica_id: Replica::get_replica_id(&znode)?,
                 head_server: head_server,
                 tail_server: tail_server,
                 replica_server: replica_server,
             })
+        }
+
+        pub fn start(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+            //The replica service should always be running
+            println!("Starting replica server");
+            self.replica_server.start(self.socket.clone())?;
+
+            //Run the head and tail servers based on the position of the replica in the chain
+            if self.is_head()? {
+                println!("Starting head server");
+                self.head_server.start(self.socket.clone())?;
+            }
+            if self.is_tail()? {
+                println!("Starting tail server");
+                self.tail_server.start(self.socket.clone())?;
+            }
+
+            Ok(())
         }
     }
 }
@@ -380,7 +439,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let znode_data = format!("{}\n{}", SOCKET_ADDRESS, NAME);
-    let replica = replica_manager::Replica::new(&args[1], &args[2], &znode_data, socket, replica_data)?;
+    let mut replica = replica_manager::Replica::new(&args[1], &args[2], &znode_data, socket, replica_data)?;
+    replica.start();
 
     Ok(())
 }
