@@ -44,7 +44,7 @@ static NAME : &str = "Alex Wolski";
 
 #[tonic::async_trait]
 pub trait GRpcServer {
-    async fn start(&self, socket: SocketAddr) -> Result<(), Box<dyn std::error::Error>>;
+    fn start(&mut self, socket: SocketAddr) -> Result<(), Box<dyn std::error::Error>>;
     fn stop(self) -> Result<(), Box<dyn std::error::Error>>;
 }
 
@@ -83,11 +83,14 @@ impl HeadServerManager {
 
 #[tonic::async_trait]
 impl GRpcServer for HeadServerManager {
-    async fn start(&self, socket: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
+    fn start(&mut self, socket: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         let head_service = HeadChainReplicaService { data: self.data.clone() };
-        let head_server = Server::builder().add_service(HeadChainReplicaServer::new(head_service));
+        let mut head_server = Server::builder().add_service(HeadChainReplicaServer::new(head_service));
 
-        head_server.serve(socket).await?;
+        self.join_handle.insert(tokio::spawn(async move {
+            head_server.serve(socket).await;
+        }));
+
         Ok(())
     }
 
@@ -137,11 +140,14 @@ impl TailServerManager {
 
 #[tonic::async_trait]
 impl GRpcServer for TailServerManager {
-    async fn start(&self, socket: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
+    fn start(&mut self, socket: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         let tail_service = TailChainReplicaService { data: self.data.clone() };
-        let tail_server = Server::builder().add_service(TailChainReplicaServer::new(tail_service));
+        let mut tail_server = Server::builder().add_service(TailChainReplicaServer::new(tail_service));
 
-        tail_server.serve(socket).await?;
+        self.join_handle.insert(tokio::spawn(async move {
+            tail_server.serve(socket).await;
+        }));
+
         Ok(())
     }
 
@@ -209,11 +215,14 @@ impl ReplicaServerManager {
 
 #[tonic::async_trait]
 impl GRpcServer for ReplicaServerManager {
-    async fn start(&self, socket: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
+    fn start(&mut self, socket: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         let replica_service = ReplicaService { data: self.data.clone() };
-        let replica_server = Server::builder().add_service(ReplicaServer::new(replica_service));
+        let mut replica_server = Server::builder().add_service(ReplicaServer::new(replica_service));
 
-        replica_server.serve(socket).await?;
+        self.join_handle.insert(tokio::spawn(async move {
+            replica_server.serve(socket).await;
+        }));
+
         Ok(())
     }
 
@@ -315,20 +324,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     zk_client.create(&args[2], &znode_data, CreateMode::EphemeralSequential)?;
 
     println!("Creating services");
-    let head_server = HeadServerManager::new(data.clone())?;
-    head_server.start(socket.clone());
-    let tail_server = TailServerManager::new(data.clone())?;
-    tail_server.start(socket.clone());
-    let replica_server = ReplicaServerManager::new(data.clone())?;
-    replica_server.start(socket.clone());
+    let mut head_server = HeadServerManager::new(data.clone())?;
+    head_server.start(socket.clone())?;
+    let mut tail_server = TailServerManager::new(data.clone())?;
+    tail_server.start(socket.clone())?;
+    let mut replica_server = ReplicaServerManager::new(data.clone())?;
+    replica_server.start(socket.clone())?;
 
-    // head_server.stop()?;
-    // tail_server.stop()?;
-    // replica_server.stop()?;
+    tokio::time::sleep(tokio::time::Duration::from_millis(3000)).await;
 
-    loop {
-
-    }
+    head_server.stop()?;
+    tail_server.stop()?;
+    replica_server.stop()?;
 
     Ok(())
 }
