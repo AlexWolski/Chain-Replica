@@ -252,30 +252,39 @@ impl GRpcServer for TailServerManager {
 pub struct ReplicaService {
     shared_data: Arc<replica_data>,
     active: Arc<RwLock<bool>>,
+    new_tail: bool,
 }
 
 #[tonic::async_trait]
 impl Replica for ReplicaService {
     async fn update(&self, request: Request<UpdateRequest>) ->
     Result<Response<UpdateResponse>, Status> {
-        println!("Received Update Request. Key: {}, newValue: {}, xID: {}", request.get_ref().key, request.get_ref().new_value, request.get_ref().xid);
-
-        let update_response = chain::UpdateResponse {
-            rc: 0
-        };
-
-        Ok(Response::new(update_response))
+    	//If the replica is a new tail, otify the predecesor to send a state transfer
+    	if self.new_tail {
+            let update_response = chain::UpdateResponse { rc: 1 };
+            Ok(Response::new(update_response))
+    	}
+    	else {
+            println!("Received Update Request. Key: {}, newValue: {}, xID: {}", request.get_ref().key, request.get_ref().new_value, request.get_ref().xid);
+            let update_response = chain::UpdateResponse { rc: 0 };
+            Ok(Response::new(update_response))
+        }
     }
 
     async fn state_transfer(&self, request: Request<StateTransferRequest>) ->
     Result<Response<StateTransferResponse>, Status> {
-        println!("Received State Transfer Request. xID: {}", request.get_ref().xid);
-
-        let transfer_response = chain::StateTransferResponse {
-            rc: 0
-        };
-
-        Ok(Response::new(transfer_response))
+    	if self.new_tail {
+            println!("Received State Transfer Request. xID: {}", request.get_ref().xid);
+            let transfer_response = chain::StateTransferResponse { rc: 0 };
+            //To-Do: Change new_tail to an Arc so we can mutate it
+            //self.new_tail = false;
+            Ok(Response::new(transfer_response))
+        }
+        //Notify the predecessor that this replica isn't a new tail
+        else {
+            let transfer_response = chain::StateTransferResponse { rc: 1 };
+            Ok(Response::new(transfer_response))
+        }
     }
 
     async fn ack(&self, request: Request<AckRequest>) ->
@@ -315,6 +324,8 @@ impl GRpcServer for ReplicaServerManager {
         let replica_service = ReplicaService {
             shared_data: self.shared_data.clone(),
             active: self.active.clone(),
+            //Assume that the replica is always added to the end of the chain
+            new_tail: true,
         };
         
         let replica_server = Server::builder().add_service(ReplicaServer::new(replica_service));
@@ -645,17 +656,16 @@ mod replica_manager {
 
         pub fn start(&mut self) -> Result<(), Box<dyn std::error::Error>> {
             //The replica service should always be running
+            //And we will always add the server as a new tail, so tail should be running
             println!("Starting replica server");
             self.replica_server.start(self.socket.clone())?;
+            println!("Starting tail server");
+            self.tail_server.start(self.socket.clone())?;
 
             //Run the head and tail servers based on the position of the replica in the chain
             if self.is_head()? {
                 println!("Starting head server");
-                self.head_server.start(self.socket.clone())?;
-            }
-            if self.is_tail()? {
-                println!("Starting tail server");
-                self.tail_server.start(self.socket.clone())?;
+            self.head_server.start(self.socket.clone())?;
             }
 
             let pred = self.get_pred()?;
