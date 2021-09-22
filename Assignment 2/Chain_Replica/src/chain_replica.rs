@@ -58,13 +58,16 @@ pub trait GRpcServer {
     fn is_running(&self) -> bool;
 }
 
+pub struct replica_data {
+    pub database: Arc<RwLock<HashMap<String, i32>>>,
+    pub sent: Arc<RwLock<Vec<(String, i32, u32)>>>,
+    pub ack: Arc<RwLock<Vec<u32>>>,
+    pub pred_addr: Arc<RwLock<Option<String>>>,
+    pub succ_addr: Arc<RwLock<Option<String>>>,
+}
+
 pub struct HeadChainReplicaService {
-    data: Arc<RwLock<HashMap<String, i32>>>,
-    sent: Arc<RwLock<Vec<(String, i32, u32)>>>,
-    ack: Arc<RwLock<Vec<u32>>>,
-    pred_addr: Arc<RwLock<Option<String>>>,
-    succ_addr: Arc<RwLock<Option<String>>>,
-    active: Arc<RwLock<bool>>,
+    shared_data: Arc<replica_data>,
 }
 
 #[tonic::async_trait]
@@ -83,27 +86,17 @@ impl HeadChainReplica for HeadChainReplicaService {
 
 pub struct HeadServerManager {
     //Service data
-    data: Arc<RwLock<HashMap<String, i32>>>,
-    sent: Arc<RwLock<Vec<(String, i32, u32)>>>,
-    ack: Arc<RwLock<Vec<u32>>>,
-    pred_addr: Arc<RwLock<Option<String>>>,
-    succ_addr: Arc<RwLock<Option<String>>>,
-    active: Arc<RwLock<bool>>,
+    shared_data: Arc<replica_data>,
     //Server data
     join_handle: Option<JoinHandle<()>>,
     running: bool,
 }
 
 impl HeadServerManager {
-    pub fn new(data: Arc<RwLock<HashMap<String, i32>>>)
+    pub fn new(shared_data: Arc<replica_data>)
     -> Result<HeadServerManager, Box<dyn std::error::Error>> {
         Ok(HeadServerManager {
-            data: data,
-            sent: Arc::new(RwLock::new(Vec::<(String, i32, u32)>::new())),
-            ack: Arc::new(RwLock::new(Vec::<u32>::new())),
-            pred_addr: Arc::new(RwLock::new(None)),
-            succ_addr: Arc::new(RwLock::new(None)),
-            active: Arc::new(RwLock::new(false)),
+            shared_data: shared_data.clone(),
             join_handle: None,
             running: false,
         })
@@ -114,12 +107,7 @@ impl HeadServerManager {
 impl GRpcServer for HeadServerManager {
     fn start(&mut self, socket: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         let head_service = HeadChainReplicaService {
-            data: self.data.clone(),
-            sent: self.sent.clone(),
-            ack: self.ack.clone(),
-            pred_addr: self.pred_addr.clone(),
-            succ_addr: self.succ_addr.clone(),
-            active: self.active.clone(),
+            shared_data: self.shared_data.clone(),
         };
 
         let head_server = Server::builder().add_service(HeadChainReplicaServer::new(head_service));
@@ -152,12 +140,7 @@ impl GRpcServer for HeadServerManager {
 
 
 pub struct TailChainReplicaService {
-    data: Arc<RwLock<HashMap<String, i32>>>,
-    sent: Arc<RwLock<Vec<(String, i32, u32)>>>,
-    ack: Arc<RwLock<Vec<u32>>>,
-    pred_addr: Arc<RwLock<Option<String>>>,
-    succ_addr: Arc<RwLock<Option<String>>>,
-    active: Arc<RwLock<bool>>,
+    shared_data: Arc<replica_data>,
 }
 
 #[tonic::async_trait]
@@ -178,27 +161,17 @@ impl TailChainReplica for TailChainReplicaService {
 
 pub struct TailServerManager {
     //Service data
-    data: Arc<RwLock<HashMap<String, i32>>>,
-    sent: Arc<RwLock<Vec<(String, i32, u32)>>>,
-    ack: Arc<RwLock<Vec<u32>>>,
-    pred_addr: Arc<RwLock<Option<String>>>,
-    succ_addr: Arc<RwLock<Option<String>>>,
-    active: Arc<RwLock<bool>>,
+    shared_data: Arc<replica_data>,
     //Server data
     join_handle: Option<JoinHandle<()>>,
     running: bool,
 }
 
 impl TailServerManager {
-    pub fn new(data: Arc<RwLock<HashMap<String, i32>>>)
+    pub fn new(shared_data: Arc<replica_data>)
     -> Result<TailServerManager, Box<dyn std::error::Error>> {
         Ok(TailServerManager {
-            data: data,
-            sent: Arc::new(RwLock::new(Vec::<(String, i32, u32)>::new())),
-            ack: Arc::new(RwLock::new(Vec::<u32>::new())),
-            pred_addr: Arc::new(RwLock::new(None)),
-            succ_addr: Arc::new(RwLock::new(None)),
-            active: Arc::new(RwLock::new(false)),
+            shared_data: shared_data.clone(),
             join_handle: None,
             running: false,
         })
@@ -209,12 +182,7 @@ impl TailServerManager {
 impl GRpcServer for TailServerManager {
     fn start(&mut self, socket: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         let tail_service = TailChainReplicaService {
-            data: self.data.clone(),
-            sent: self.sent.clone(),
-            ack: self.ack.clone(),
-            pred_addr: self.pred_addr.clone(),
-            succ_addr: self.succ_addr.clone(),
-            active: self.active.clone(),
+            shared_data: self.shared_data.clone(),
         };
 
         let tail_server = Server::builder().add_service(TailChainReplicaServer::new(tail_service));
@@ -247,12 +215,7 @@ impl GRpcServer for TailServerManager {
 
 
 pub struct ReplicaService {
-    data: Arc<RwLock<HashMap<String, i32>>>,
-    sent: Arc<RwLock<Vec<(String, i32, u32)>>>,
-    ack: Arc<RwLock<Vec<u32>>>,
-    pred_addr: Arc<RwLock<Option<String>>>,
-    succ_addr: Arc<RwLock<Option<String>>>,
-    active: Arc<RwLock<bool>>,
+    shared_data: Arc<replica_data>,
 }
 
 #[tonic::async_trait]
@@ -291,27 +254,17 @@ impl Replica for ReplicaService {
 
 pub struct ReplicaServerManager {
     //Service data
-    data: Arc<RwLock<HashMap<String, i32>>>,
-    sent: Arc<RwLock<Vec<(String, i32, u32)>>>,
-    ack: Arc<RwLock<Vec<u32>>>,
-    pred_addr: Arc<RwLock<Option<String>>>,
-    succ_addr: Arc<RwLock<Option<String>>>,
-    active: Arc<RwLock<bool>>,
+    shared_data: Arc<replica_data>,
     //Server data
     join_handle: Option<JoinHandle<()>>,
     running: bool,
 }
 
 impl ReplicaServerManager {
-    pub fn new(data: Arc<RwLock<HashMap<String, i32>>>)
+    pub fn new(shared_data: Arc<replica_data>)
     -> Result<ReplicaServerManager, Box<dyn std::error::Error>> {
         Ok(ReplicaServerManager {
-            data: data,
-            sent: Arc::new(RwLock::new(Vec::<(String, i32, u32)>::new())),
-            ack: Arc::new(RwLock::new(Vec::<u32>::new())),
-            pred_addr: Arc::new(RwLock::new(None)),
-            succ_addr: Arc::new(RwLock::new(None)),
-            active: Arc::new(RwLock::new(false)),
+            shared_data: shared_data.clone(),
             join_handle: None,
             running: false,
         })
@@ -322,12 +275,7 @@ impl ReplicaServerManager {
 impl GRpcServer for ReplicaServerManager {
     fn start(&mut self, socket: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         let replica_service = ReplicaService {
-            data: self.data.clone(),
-            sent: self.sent.clone(),
-            ack: self.ack.clone(),
-            pred_addr: self.pred_addr.clone(),
-            succ_addr: self.succ_addr.clone(),
-            active: self.active.clone(),
+            shared_data: self.shared_data.clone(),
         };
         
         let replica_server = Server::builder().add_service(ReplicaServer::new(replica_service));
@@ -420,7 +368,7 @@ mod replica_manager {
         socket: SocketAddr,
         base_path: String,
         replica_id: u32,
-        replica_data: Arc<RwLock<HashMap<String, i32>>>,
+        shared_data: Arc<replica_data>,
         head_server: HeadServerManager,
         tail_server: TailServerManager,
         replica_server: ReplicaServerManager,
@@ -621,19 +569,25 @@ mod replica_manager {
             let znode = zk_manager::create(&mut instance, &znode_path, &znode_data, CreateMode::EphemeralSequential)?;
 
             //Create the shared data for the servers
-            let replica_data = Arc::new(RwLock::new(HashMap::<String, i32>::new()));
+            let shared_data = Arc::new(replica_data{
+            	database: Arc::new(RwLock::new(HashMap::<String, i32>::new())),
+            	sent: Arc::new(RwLock::new(Vec::<(String, i32, u32)>::new())),
+            	ack: Arc::new(RwLock::new(Vec::<u32>::new())),
+            	pred_addr: Arc::new(RwLock::new(Option::<String>::None)),
+            	succ_addr: Arc::new(RwLock::new(Option::<String>::None)),
+            });
 
             //Create servers for the head, tail, and replica service
-            let head_server = HeadServerManager::new(replica_data.clone())?;
-            let tail_server = TailServerManager::new(replica_data.clone())?;
-            let replica_server = ReplicaServerManager::new(replica_data.clone())?;
+            let head_server = HeadServerManager::new(shared_data.clone())?;
+            let tail_server = TailServerManager::new(shared_data.clone())?;
+            let replica_server = ReplicaServerManager::new(shared_data.clone())?;
 
             Ok(Replica{
                 zk_instance: instance,
                 socket: socket,
                 base_path: base_path.to_string(),
                 replica_id: Replica::get_replica_id(&znode)?,
-                replica_data: replica_data.clone(),
+                shared_data: shared_data.clone(),
                 head_server: head_server,
                 tail_server: tail_server,
                 replica_server: replica_server,
