@@ -248,6 +248,10 @@ mod zk_manager {
 
     pub struct ZkClient {
         zk_instance: ZooKeeper,
+        socket: SocketAddr,
+        head_server: HeadServerManager,
+        tail_server: TailServerManager,
+        replica_server: ReplicaServerManager,
     }
 
     impl ZkClient {
@@ -304,13 +308,25 @@ mod zk_manager {
             Ok(())
         }
 
-        pub fn new(host_list: &str, control_path: &str, znode_data: &str)
+        pub fn new(host_list: &str, control_path: &str, znode_data: &str, socket: SocketAddr, replica_data: Arc<RwLock<HashMap<String, i32>>>)
         -> Result<ZkClient, Box<dyn std::error::Error>> {
+            //Connect to the ZooKeeper host
             let mut instance = ZkClient::connect(host_list, 5)?;
+            //Create a new zNode for this replica
             ZkClient::create(&mut instance, control_path, &znode_data, CreateMode::EphemeralSequential)?;
+
+            let mut head_server = HeadServerManager::new(replica_data.clone())?;
+            let mut tail_server = TailServerManager::new(replica_data.clone())?;
+            let mut replica_server = ReplicaServerManager::new(replica_data.clone())?;
+
+            replica_server.start(socket)?;
 
             Ok(ZkClient{
                 zk_instance: instance,
+                socket: socket,
+                head_server: head_server,
+                tail_server: tail_server,
+                replica_server: replica_server,
             })
         }
     }
@@ -323,7 +339,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
 
     //Shared hashmap protected by a mutex
-    let data = Arc::new(RwLock::new(HashMap::<String, i32>::new()));
+    let replica_data = Arc::new(RwLock::new(HashMap::<String, i32>::new()));
 
     if args.len() != 3
     {
@@ -332,21 +348,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let znode_data = format!("{}\n{}", SOCKET_ADDRESS, NAME);
-    let zk_client = zk_manager::ZkClient::new(&args[1], &args[2], &znode_data)?;
-
-    println!("Creating services");
-    let mut head_server = HeadServerManager::new(data.clone())?;
-    head_server.start(socket.clone())?;
-    let mut tail_server = TailServerManager::new(data.clone())?;
-    tail_server.start(socket.clone())?;
-    let mut replica_server = ReplicaServerManager::new(data.clone())?;
-    replica_server.start(socket.clone())?;
-
-    tokio::time::sleep(tokio::time::Duration::from_millis(3000)).await;
-
-    head_server.stop()?;
-    tail_server.stop()?;
-    replica_server.stop()?;
+    let zk_client = zk_manager::ZkClient::new(&args[1], &args[2], &znode_data, socket, replica_data)?;
 
     Ok(())
 }
