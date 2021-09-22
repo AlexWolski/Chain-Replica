@@ -60,6 +60,8 @@ pub trait GRpcServer {
 
 pub struct HeadChainReplicaService {
     data: Arc<RwLock<HashMap<String, i32>>>,
+    sent: Arc<RwLock<Vec<(String, i32, u32)>>>,
+    ack: Arc<RwLock<Vec<u32>>>,
     pred_addr: Arc<RwLock<Option<String>>>,
     succ_addr: Arc<RwLock<Option<String>>>,
     active: Arc<RwLock<bool>>,
@@ -82,6 +84,8 @@ impl HeadChainReplica for HeadChainReplicaService {
 pub struct HeadServerManager {
     //Service data
     data: Arc<RwLock<HashMap<String, i32>>>,
+    sent: Arc<RwLock<Vec<(String, i32, u32)>>>,
+    ack: Arc<RwLock<Vec<u32>>>,
     pred_addr: Arc<RwLock<Option<String>>>,
     succ_addr: Arc<RwLock<Option<String>>>,
     active: Arc<RwLock<bool>>,
@@ -95,6 +99,8 @@ impl HeadServerManager {
     -> Result<HeadServerManager, Box<dyn std::error::Error>> {
         Ok(HeadServerManager {
             data: data,
+            sent: Arc::new(RwLock::new(Vec::<(String, i32, u32)>::new())),
+            ack: Arc::new(RwLock::new(Vec::<u32>::new())),
             pred_addr: Arc::new(RwLock::new(None)),
             succ_addr: Arc::new(RwLock::new(None)),
             active: Arc::new(RwLock::new(false)),
@@ -109,6 +115,8 @@ impl GRpcServer for HeadServerManager {
     fn start(&mut self, socket: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         let head_service = HeadChainReplicaService {
             data: self.data.clone(),
+            sent: self.sent.clone(),
+            ack: self.ack.clone(),
             pred_addr: self.pred_addr.clone(),
             succ_addr: self.succ_addr.clone(),
             active: self.active.clone(),
@@ -145,6 +153,8 @@ impl GRpcServer for HeadServerManager {
 
 pub struct TailChainReplicaService {
     data: Arc<RwLock<HashMap<String, i32>>>,
+    sent: Arc<RwLock<Vec<(String, i32, u32)>>>,
+    ack: Arc<RwLock<Vec<u32>>>,
     pred_addr: Arc<RwLock<Option<String>>>,
     succ_addr: Arc<RwLock<Option<String>>>,
     active: Arc<RwLock<bool>>,
@@ -169,6 +179,8 @@ impl TailChainReplica for TailChainReplicaService {
 pub struct TailServerManager {
     //Service data
     data: Arc<RwLock<HashMap<String, i32>>>,
+    sent: Arc<RwLock<Vec<(String, i32, u32)>>>,
+    ack: Arc<RwLock<Vec<u32>>>,
     pred_addr: Arc<RwLock<Option<String>>>,
     succ_addr: Arc<RwLock<Option<String>>>,
     active: Arc<RwLock<bool>>,
@@ -182,6 +194,8 @@ impl TailServerManager {
     -> Result<TailServerManager, Box<dyn std::error::Error>> {
         Ok(TailServerManager {
             data: data,
+            sent: Arc::new(RwLock::new(Vec::<(String, i32, u32)>::new())),
+            ack: Arc::new(RwLock::new(Vec::<u32>::new())),
             pred_addr: Arc::new(RwLock::new(None)),
             succ_addr: Arc::new(RwLock::new(None)),
             active: Arc::new(RwLock::new(false)),
@@ -196,6 +210,8 @@ impl GRpcServer for TailServerManager {
     fn start(&mut self, socket: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         let tail_service = TailChainReplicaService {
             data: self.data.clone(),
+            sent: self.sent.clone(),
+            ack: self.ack.clone(),
             pred_addr: self.pred_addr.clone(),
             succ_addr: self.succ_addr.clone(),
             active: self.active.clone(),
@@ -232,6 +248,8 @@ impl GRpcServer for TailServerManager {
 
 pub struct ReplicaService {
     data: Arc<RwLock<HashMap<String, i32>>>,
+    sent: Arc<RwLock<Vec<(String, i32, u32)>>>,
+    ack: Arc<RwLock<Vec<u32>>>,
     pred_addr: Arc<RwLock<Option<String>>>,
     succ_addr: Arc<RwLock<Option<String>>>,
     active: Arc<RwLock<bool>>,
@@ -274,6 +292,8 @@ impl Replica for ReplicaService {
 pub struct ReplicaServerManager {
     //Service data
     data: Arc<RwLock<HashMap<String, i32>>>,
+    sent: Arc<RwLock<Vec<(String, i32, u32)>>>,
+    ack: Arc<RwLock<Vec<u32>>>,
     pred_addr: Arc<RwLock<Option<String>>>,
     succ_addr: Arc<RwLock<Option<String>>>,
     active: Arc<RwLock<bool>>,
@@ -287,6 +307,8 @@ impl ReplicaServerManager {
     -> Result<ReplicaServerManager, Box<dyn std::error::Error>> {
         Ok(ReplicaServerManager {
             data: data,
+            sent: Arc::new(RwLock::new(Vec::<(String, i32, u32)>::new())),
+            ack: Arc::new(RwLock::new(Vec::<u32>::new())),
             pred_addr: Arc::new(RwLock::new(None)),
             succ_addr: Arc::new(RwLock::new(None)),
             active: Arc::new(RwLock::new(false)),
@@ -301,6 +323,8 @@ impl GRpcServer for ReplicaServerManager {
     fn start(&mut self, socket: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         let replica_service = ReplicaService {
             data: self.data.clone(),
+            sent: self.sent.clone(),
+            ack: self.ack.clone(),
             pred_addr: self.pred_addr.clone(),
             succ_addr: self.succ_addr.clone(),
             active: self.active.clone(),
