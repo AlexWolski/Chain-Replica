@@ -247,7 +247,7 @@ mod zk_manager {
     }
 
     pub struct ZkClient {
-        zk_instance: zookeeper::ZooKeeper,
+        zk_instance: ZooKeeper,
     }
 
     impl ZkClient {
@@ -262,8 +262,8 @@ mod zk_manager {
             }
         }
 
-        pub fn connect(host_list: &str, timeout: u64)
-        -> Result<ZkClient, Box<dyn std::error::Error>> {
+        fn connect(host_list: &str, timeout: u64)
+        -> Result<ZooKeeper, Box<dyn std::error::Error>> {
             //Connecting to ZooKeeper
             let connect_result = ZooKeeper::connect(
                 host_list,
@@ -280,16 +280,14 @@ mod zk_manager {
             let instance = connect_result.unwrap();
             instance.add_listener(ZkClient::conn_listener);
 
-            Ok(ZkClient {
-                zk_instance: instance,
-            })
+            Ok(instance)
         }
 
-        pub fn create(&self, control_path: &str, znode_data: &str, create_mode: CreateMode)
+        fn create(instance: &mut ZooKeeper, control_path: &str, znode_data: &str, create_mode: CreateMode)
         -> Result<(), Box<dyn std::error::Error>> {
             let znode_path = format!("{}/{}", control_path, ZNODE_PREFIX);
 
-            let create_result = self.zk_instance.create(&znode_path,
+            let create_result = instance.create(&znode_path,
                 znode_data.as_bytes().to_vec(),
                 Acl::open_unsafe().clone(),
                 create_mode);
@@ -304,6 +302,16 @@ mod zk_manager {
             println!("Successfully created zNode: {}", create_result.unwrap());
 
             Ok(())
+        }
+
+        pub fn new(host_list: &str, control_path: &str, znode_data: &str)
+        -> Result<ZkClient, Box<dyn std::error::Error>> {
+            let mut instance = ZkClient::connect(host_list, 5)?;
+            ZkClient::create(&mut instance, control_path, &znode_data, CreateMode::EphemeralSequential)?;
+
+            Ok(ZkClient{
+                zk_instance: instance,
+            })
         }
     }
 }
@@ -324,8 +332,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let znode_data = format!("{}\n{}", SOCKET_ADDRESS, NAME);
-    let zk_client = zk_manager::ZkClient::connect(&args[1], 5)?;
-    zk_client.create(&args[2], &znode_data, CreateMode::EphemeralSequential)?;
+    let zk_client = zk_manager::ZkClient::new(&args[1], &args[2], &znode_data)?;
 
     println!("Creating services");
     let mut head_server = HeadServerManager::new(data.clone())?;
