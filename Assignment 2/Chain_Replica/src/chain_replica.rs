@@ -59,7 +59,10 @@ pub trait GRpcServer {
 }
 
 pub struct HeadChainReplicaService {
-    data: Arc<RwLock<HashMap<String, i32>>>
+    data: Arc<RwLock<HashMap<String, i32>>>,
+    pred_addr: Arc<RwLock<Option<String>>>,
+    succ_addr: Arc<RwLock<Option<String>>>,
+    active: Arc<RwLock<bool>>,
 }
 
 #[tonic::async_trait]
@@ -77,7 +80,12 @@ impl HeadChainReplica for HeadChainReplicaService {
 }
 
 pub struct HeadServerManager {
+    //Service data
     data: Arc<RwLock<HashMap<String, i32>>>,
+    pred_addr: Arc<RwLock<Option<String>>>,
+    succ_addr: Arc<RwLock<Option<String>>>,
+    active: Arc<RwLock<bool>>,
+    //Server data
     join_handle: Option<JoinHandle<()>>,
     running: bool,
 }
@@ -87,6 +95,9 @@ impl HeadServerManager {
     -> Result<HeadServerManager, Box<dyn std::error::Error>> {
         Ok(HeadServerManager {
             data: data,
+            pred_addr: Arc::new(RwLock::new(None)),
+            succ_addr: Arc::new(RwLock::new(None)),
+            active: Arc::new(RwLock::new(false)),
             join_handle: None,
             running: false,
         })
@@ -96,7 +107,13 @@ impl HeadServerManager {
 #[tonic::async_trait]
 impl GRpcServer for HeadServerManager {
     fn start(&mut self, socket: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
-        let head_service = HeadChainReplicaService { data: self.data.clone() };
+        let head_service = HeadChainReplicaService {
+            data: self.data.clone(),
+            pred_addr: self.pred_addr.clone(),
+            succ_addr: self.succ_addr.clone(),
+            active: self.active.clone(),
+        };
+
         let head_server = Server::builder().add_service(HeadChainReplicaServer::new(head_service));
 
         let _ = self.join_handle.insert(tokio::spawn(async move {
@@ -127,7 +144,10 @@ impl GRpcServer for HeadServerManager {
 
 
 pub struct TailChainReplicaService {
-    data: Arc<RwLock<HashMap<String, i32>>>
+    data: Arc<RwLock<HashMap<String, i32>>>,
+    pred_addr: Arc<RwLock<Option<String>>>,
+    succ_addr: Arc<RwLock<Option<String>>>,
+    active: Arc<RwLock<bool>>,
 }
 
 #[tonic::async_trait]
@@ -147,7 +167,12 @@ impl TailChainReplica for TailChainReplicaService {
 
 
 pub struct TailServerManager {
+    //Service data
     data: Arc<RwLock<HashMap<String, i32>>>,
+    pred_addr: Arc<RwLock<Option<String>>>,
+    succ_addr: Arc<RwLock<Option<String>>>,
+    active: Arc<RwLock<bool>>,
+    //Server data
     join_handle: Option<JoinHandle<()>>,
     running: bool,
 }
@@ -157,6 +182,9 @@ impl TailServerManager {
     -> Result<TailServerManager, Box<dyn std::error::Error>> {
         Ok(TailServerManager {
             data: data,
+            pred_addr: Arc::new(RwLock::new(None)),
+            succ_addr: Arc::new(RwLock::new(None)),
+            active: Arc::new(RwLock::new(false)),
             join_handle: None,
             running: false,
         })
@@ -166,7 +194,13 @@ impl TailServerManager {
 #[tonic::async_trait]
 impl GRpcServer for TailServerManager {
     fn start(&mut self, socket: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
-        let tail_service = TailChainReplicaService { data: self.data.clone() };
+        let tail_service = TailChainReplicaService {
+            data: self.data.clone(),
+            pred_addr: self.pred_addr.clone(),
+            succ_addr: self.succ_addr.clone(),
+            active: self.active.clone(),
+        };
+
         let tail_server = Server::builder().add_service(TailChainReplicaServer::new(tail_service));
 
         let _ = self.join_handle.insert(tokio::spawn(async move {
@@ -197,7 +231,10 @@ impl GRpcServer for TailServerManager {
 
 
 pub struct ReplicaService {
-    data: Arc<RwLock<HashMap<String, i32>>>
+    data: Arc<RwLock<HashMap<String, i32>>>,
+    pred_addr: Arc<RwLock<Option<String>>>,
+    succ_addr: Arc<RwLock<Option<String>>>,
+    active: Arc<RwLock<bool>>,
 }
 
 #[tonic::async_trait]
@@ -235,7 +272,12 @@ impl Replica for ReplicaService {
 }
 
 pub struct ReplicaServerManager {
+    //Service data
     data: Arc<RwLock<HashMap<String, i32>>>,
+    pred_addr: Arc<RwLock<Option<String>>>,
+    succ_addr: Arc<RwLock<Option<String>>>,
+    active: Arc<RwLock<bool>>,
+    //Server data
     join_handle: Option<JoinHandle<()>>,
     running: bool,
 }
@@ -245,6 +287,9 @@ impl ReplicaServerManager {
     -> Result<ReplicaServerManager, Box<dyn std::error::Error>> {
         Ok(ReplicaServerManager {
             data: data,
+            pred_addr: Arc::new(RwLock::new(None)),
+            succ_addr: Arc::new(RwLock::new(None)),
+            active: Arc::new(RwLock::new(false)),
             join_handle: None,
             running: false,
         })
@@ -254,7 +299,13 @@ impl ReplicaServerManager {
 #[tonic::async_trait]
 impl GRpcServer for ReplicaServerManager {
     fn start(&mut self, socket: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
-        let replica_service = ReplicaService { data: self.data.clone() };
+        let replica_service = ReplicaService {
+            data: self.data.clone(),
+            pred_addr: self.pred_addr.clone(),
+            succ_addr: self.succ_addr.clone(),
+            active: self.active.clone(),
+        };
+        
         let replica_server = Server::builder().add_service(ReplicaServer::new(replica_service));
 
         let _ = self.join_handle.insert(tokio::spawn(async move {
