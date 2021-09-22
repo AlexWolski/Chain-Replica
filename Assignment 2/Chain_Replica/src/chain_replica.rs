@@ -255,18 +255,7 @@ mod zk_manager {
     }
 
     impl ZkClient {
-        //Listens for changes in the connection
-        fn conn_listener(state: ZkState) {
-            match state {
-                ZkState::Connected | ZkState::ConnectedReadOnly =>
-                    println!("Connected to ZooKeeper host"),
-                ZkState::Closed =>
-                    println!("Disconnected from ZooKeeper host"),
-                _ => (),
-            }
-        }
-
-        fn connect(host_list: &str, timeout: u64)
+        fn connect<Listener: Fn(ZkState) + Send + 'static>(host_list: &str, listener: Listener, timeout: u64)
         -> Result<ZooKeeper, Box<dyn std::error::Error>> {
             //Connecting to ZooKeeper
             let connect_result = ZooKeeper::connect(
@@ -282,7 +271,7 @@ mod zk_manager {
             };
 
             let instance = connect_result.unwrap();
-            instance.add_listener(ZkClient::conn_listener);
+            instance.add_listener(listener);
 
             Ok(instance)
         }
@@ -308,10 +297,21 @@ mod zk_manager {
             Ok(())
         }
 
+        //Prints the ZooKeeper connection state
+        fn print_conn_state(state: ZkState) {
+            match state {
+                ZkState::Connected | ZkState::ConnectedReadOnly =>
+                    println!("Connected to ZooKeeper host"),
+                ZkState::Closed =>
+                    println!("Disconnected from ZooKeeper host"),
+                _ => (),
+            }
+        }
+
         pub fn new(host_list: &str, control_path: &str, znode_data: &str, socket: SocketAddr, replica_data: Arc<RwLock<HashMap<String, i32>>>)
         -> Result<ZkClient, Box<dyn std::error::Error>> {
             //Connect to the ZooKeeper host
-            let mut instance = ZkClient::connect(host_list, 5)?;
+            let mut instance = ZkClient::connect(host_list, ZkClient::print_conn_state, 5)?;
             //Create a new zNode for this replica
             ZkClient::create(&mut instance, control_path, &znode_data, CreateMode::EphemeralSequential)?;
 
