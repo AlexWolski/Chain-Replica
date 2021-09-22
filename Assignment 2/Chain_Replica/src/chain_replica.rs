@@ -49,7 +49,7 @@ static SEQUENCE_LEN: u32 = 10;
 #[tonic::async_trait]
 pub trait GRpcServer {
     fn start(&mut self, socket: SocketAddr) -> Result<(), Box<dyn std::error::Error>>;
-    fn stop(self) -> Result<(), Box<dyn std::error::Error>>;
+    fn stop(&self) -> Result<(), Box<dyn std::error::Error>>;
 }
 
 pub struct HeadChainReplicaService {
@@ -91,15 +91,15 @@ impl GRpcServer for HeadServerManager {
         let head_service = HeadChainReplicaService { data: self.data.clone() };
         let mut head_server = Server::builder().add_service(HeadChainReplicaServer::new(head_service));
 
-        self.join_handle.insert(tokio::spawn(async move {
+        &self.join_handle.insert(tokio::spawn(async move {
             head_server.serve(socket).await;
         }));
 
         Ok(())
     }
 
-    fn stop(self) -> Result<(), Box<dyn std::error::Error>> {
-        match self.join_handle {
+    fn stop(&self) -> Result<(), Box<dyn std::error::Error>> {
+        match &self.join_handle {
             Some(handle) => { handle.abort(); Ok(()) }
             None => return Err(Error::new(ErrorKind::Other, format!("Cannot stop a server that isn't running.")).into()),
         }
@@ -148,15 +148,15 @@ impl GRpcServer for TailServerManager {
         let tail_service = TailChainReplicaService { data: self.data.clone() };
         let mut tail_server = Server::builder().add_service(TailChainReplicaServer::new(tail_service));
 
-        self.join_handle.insert(tokio::spawn(async move {
+        &self.join_handle.insert(tokio::spawn(async move {
             tail_server.serve(socket).await;
         }));
 
         Ok(())
     }
 
-    fn stop(self) -> Result<(), Box<dyn std::error::Error>> {
-        match self.join_handle {
+    fn stop(&self) -> Result<(), Box<dyn std::error::Error>> {
+        match &self.join_handle {
             Some(handle) => { handle.abort(); Ok(()) }
             None => return Err(Error::new(ErrorKind::Other, format!("Cannot stop a server that isn't running.")).into()),
         }
@@ -223,15 +223,15 @@ impl GRpcServer for ReplicaServerManager {
         let replica_service = ReplicaService { data: self.data.clone() };
         let mut replica_server = Server::builder().add_service(ReplicaServer::new(replica_service));
 
-        self.join_handle.insert(tokio::spawn(async move {
+        &self.join_handle.insert(tokio::spawn(async move {
             replica_server.serve(socket).await;
         }));
 
         Ok(())
     }
 
-    fn stop(self) -> Result<(), Box<dyn std::error::Error>> {
-        match self.join_handle {
+    fn stop(&self) -> Result<(), Box<dyn std::error::Error>> {
+        match &self.join_handle {
             Some(handle) => { handle.abort(); Ok(()) }
             None => return Err(Error::new(ErrorKind::Other, format!("Cannot stop a server that isn't running.")).into()),
         }
