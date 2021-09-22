@@ -49,7 +49,8 @@ static SEQUENCE_LEN: u32 = 10;
 #[tonic::async_trait]
 pub trait GRpcServer {
     fn start(&mut self, socket: SocketAddr) -> Result<(), Box<dyn std::error::Error>>;
-    fn stop(&self) -> Result<(), Box<dyn std::error::Error>>;
+    fn stop(&mut self) -> Result<(), Box<dyn std::error::Error>>;
+    fn is_running(&self) -> bool;
 }
 
 pub struct HeadChainReplicaService {
@@ -73,6 +74,7 @@ impl HeadChainReplica for HeadChainReplicaService {
 pub struct HeadServerManager {
     data: Arc<RwLock<HashMap<String, i32>>>,
     join_handle: Option<JoinHandle<()>>,
+    running: bool,
 }
 
 impl HeadServerManager {
@@ -81,6 +83,7 @@ impl HeadServerManager {
         Ok(HeadServerManager {
             data: data,
             join_handle: None,
+            running: false,
         })
     }
 }
@@ -95,14 +98,25 @@ impl GRpcServer for HeadServerManager {
             head_server.serve(socket).await;
         }));
 
+        self.running = true;
+
         Ok(())
     }
 
-    fn stop(&self) -> Result<(), Box<dyn std::error::Error>> {
+    fn stop(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         match &self.join_handle {
-            Some(handle) => { handle.abort(); Ok(()) }
+            Some(handle) => {
+                handle.abort();
+                self.running = false;
+                Ok(())
+            }
+
             None => return Err(Error::new(ErrorKind::Other, format!("Cannot stop a server that isn't running.")).into()),
         }
+    }
+
+    fn is_running(&self) -> bool {
+        return self.running;
     }
 }
 
@@ -130,6 +144,7 @@ impl TailChainReplica for TailChainReplicaService {
 pub struct TailServerManager {
     data: Arc<RwLock<HashMap<String, i32>>>,
     join_handle: Option<JoinHandle<()>>,
+    running: bool,
 }
 
 impl TailServerManager {
@@ -138,6 +153,7 @@ impl TailServerManager {
         Ok(TailServerManager {
             data: data,
             join_handle: None,
+            running: false,
         })
     }
 }
@@ -152,14 +168,25 @@ impl GRpcServer for TailServerManager {
             tail_server.serve(socket).await;
         }));
 
+        self.running = true;
+
         Ok(())
     }
 
-    fn stop(&self) -> Result<(), Box<dyn std::error::Error>> {
+    fn stop(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         match &self.join_handle {
-            Some(handle) => { handle.abort(); Ok(()) }
+            Some(handle) => {
+                handle.abort();
+                self.running = false;
+                Ok(())
+            }
+
             None => return Err(Error::new(ErrorKind::Other, format!("Cannot stop a server that isn't running.")).into()),
         }
+    }
+
+    fn is_running(&self) -> bool {
+        return self.running;
     }
 }
 
@@ -205,6 +232,7 @@ impl Replica for ReplicaService {
 pub struct ReplicaServerManager {
     data: Arc<RwLock<HashMap<String, i32>>>,
     join_handle: Option<JoinHandle<()>>,
+    running: bool,
 }
 
 impl ReplicaServerManager {
@@ -213,6 +241,7 @@ impl ReplicaServerManager {
         Ok(ReplicaServerManager {
             data: data,
             join_handle: None,
+            running: false,
         })
     }
 }
@@ -227,14 +256,25 @@ impl GRpcServer for ReplicaServerManager {
             replica_server.serve(socket).await;
         }));
 
+        self.running = true;
+
         Ok(())
     }
 
-    fn stop(&self) -> Result<(), Box<dyn std::error::Error>> {
+    fn stop(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         match &self.join_handle {
-            Some(handle) => { handle.abort(); Ok(()) }
+            Some(handle) => {
+                handle.abort();
+                self.running = false;
+                Ok(())
+            }
+
             None => return Err(Error::new(ErrorKind::Other, format!("Cannot stop a server that isn't running.")).into()),
         }
+    }
+
+    fn is_running(&self) -> bool {
+        self.running
     }
 }
 
