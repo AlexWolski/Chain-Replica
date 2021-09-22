@@ -20,8 +20,8 @@ use std::io::{Error, ErrorKind};
 use std::sync::{Arc, RwLock};
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use tokio::{sync::oneshot, task::JoinHandle, task::spawn};
-use tonic::{transport::Server, transport::server, Request, Response, Status};
+use tokio::{task::JoinHandle};
+use tonic::{transport::Server, Request, Response, Status};
 use zookeeper::{Acl, CreateMode, Watcher, WatchedEvent, ZooKeeper, ZkState};
 
 //Head
@@ -92,10 +92,10 @@ impl HeadServerManager {
 impl GRpcServer for HeadServerManager {
     fn start(&mut self, socket: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         let head_service = HeadChainReplicaService { data: self.data.clone() };
-        let mut head_server = Server::builder().add_service(HeadChainReplicaServer::new(head_service));
+        let head_server = Server::builder().add_service(HeadChainReplicaServer::new(head_service));
 
-        self.join_handle.insert(tokio::spawn(async move {
-            head_server.serve(socket).await;
+        let _ = self.join_handle.insert(tokio::spawn(async move {
+            let _ = head_server.serve(socket).await;
         }));
 
         self.running = true;
@@ -162,10 +162,10 @@ impl TailServerManager {
 impl GRpcServer for TailServerManager {
     fn start(&mut self, socket: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         let tail_service = TailChainReplicaService { data: self.data.clone() };
-        let mut tail_server = Server::builder().add_service(TailChainReplicaServer::new(tail_service));
+        let tail_server = Server::builder().add_service(TailChainReplicaServer::new(tail_service));
 
-        self.join_handle.insert(tokio::spawn(async move {
-            tail_server.serve(socket).await;
+        let _ = self.join_handle.insert(tokio::spawn(async move {
+            let _ = tail_server.serve(socket).await;
         }));
 
         self.running = true;
@@ -250,10 +250,10 @@ impl ReplicaServerManager {
 impl GRpcServer for ReplicaServerManager {
     fn start(&mut self, socket: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         let replica_service = ReplicaService { data: self.data.clone() };
-        let mut replica_server = Server::builder().add_service(ReplicaServer::new(replica_service));
+        let replica_server = Server::builder().add_service(ReplicaServer::new(replica_service));
 
-        self.join_handle.insert(tokio::spawn(async move {
-            replica_server.serve(socket).await;
+        let _ = self.join_handle.insert(tokio::spawn(async move {
+            let _ = replica_server.serve(socket).await;
         }));
 
         self.running = true;
@@ -551,7 +551,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let znode_data = format!("{}\n{}", SOCKET_ADDRESS, NAME);
     let mut replica = replica_manager::Replica::new(&args[1], &args[2], &znode_data, socket)?;
-    replica.start();
+    replica.start()?;
 
     Ok(())
 }
