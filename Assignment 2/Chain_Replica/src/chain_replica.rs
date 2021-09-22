@@ -340,6 +340,7 @@ mod replica_manager {
         socket: SocketAddr,
         base_path: String,
         replica_id: u32,
+        replica_data: Arc<RwLock<HashMap<String, i32>>>,
         head_server: HeadServerManager,
         tail_server: TailServerManager,
         replica_server: ReplicaServerManager,
@@ -417,7 +418,7 @@ mod replica_manager {
             }
         }
 
-        pub fn new(host_list: &str, base_path: &str, znode_data: &str, socket: SocketAddr, replica_data: Arc<RwLock<HashMap<String, i32>>>)
+        pub fn new(host_list: &str, base_path: &str, znode_data: &str, socket: SocketAddr)
         -> Result<Replica, Box<dyn std::error::Error>> {
             //Construct the replica znode path (before the sequence number is added)
             let znode_path = format!("{}/{}", base_path, ZNODE_PREFIX);
@@ -426,6 +427,9 @@ mod replica_manager {
             let mut instance = zk_manager::connect(host_list, Replica::print_conn_state, 5)?;
             //Create a new zNode for this replica
             let znode = zk_manager::create(&mut instance, &znode_path, &znode_data, CreateMode::EphemeralSequential)?;
+
+            //Create the shared data for the servers
+            let replica_data = Arc::new(RwLock::new(HashMap::<String, i32>::new()));
 
             //Create servers for the head, tail, and replica service
             let mut head_server = HeadServerManager::new(replica_data.clone())?;
@@ -437,6 +441,7 @@ mod replica_manager {
                 socket: socket,
                 base_path: base_path.to_string(),
                 replica_id: Replica::get_replica_id(&znode)?,
+                replica_data: replica_data.clone(),
                 head_server: head_server,
                 tail_server: tail_server,
                 replica_server: replica_server,
@@ -469,9 +474,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let socket: SocketAddr = SOCKET_ADDRESS.parse()?;
     let args: Vec<String> = env::args().collect();
 
-    //Shared hashmap protected by a mutex
-    let replica_data = Arc::new(RwLock::new(HashMap::<String, i32>::new()));
-
     if args.len() != 3
     {
         println!("Correct Usage: chain_replica.rs ZOOKEEPER_HOST_PORT_LIST base_path");
@@ -479,7 +481,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let znode_data = format!("{}\n{}", SOCKET_ADDRESS, NAME);
-    let mut replica = replica_manager::Replica::new(&args[1], &args[2], &znode_data, socket, replica_data)?;
+    let mut replica = replica_manager::Replica::new(&args[1], &args[2], &znode_data, socket)?;
     replica.start();
 
     Ok(())
