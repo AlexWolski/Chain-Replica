@@ -375,7 +375,8 @@ mod replica_manager {
             }
         }
 
-        fn get_replica_addr(znode_data: &str) -> Result<String, Box<dyn std::error::Error>> {
+        //Takes the a znode data string and returns the address
+        fn parse_znode_addr(znode_data: &str) -> Result<String, Box<dyn std::error::Error>> {
             let mut znode_data_str = znode_data.to_string();
             let result = znode_data_str.find(ZNODE_DELIM);
 
@@ -395,6 +396,24 @@ mod replica_manager {
             let name = znode_data_str.split_off(delim_pos);
 
             Ok(znode_data_str)
+        }
+
+        // Takes a znode path and returns the address
+        fn get_node_address(&self, znode: String) -> Result<String, Box<dyn std::error::Error>> {
+                let result = self.zk_instance.get_data(&znode, false);
+
+                match result {
+                    Ok(node_data) => {
+                        let data_str = String::from_utf8(node_data.0)?;
+                        let address = Replica::parse_znode_addr(&data_str)?;
+
+                        Ok(address)
+                    }
+                    _ => {
+                        Err(Error::new(ErrorKind::Other,
+                            format!("Failed to get the data of znode: {}", znode)).into())
+                    }
+                }
         }
 
         //Checks if this replica is the head, assuming ZooKeeper orders the znode list from newest to oldest
@@ -511,7 +530,6 @@ mod replica_manager {
             Err(Error::new(ErrorKind::Other, format!("Invalid chain position: {}", replica_index)).into())
         }
 
-
         pub fn new(host_list: &str, base_path: &str, socket: SocketAddr)
         -> Result<Replica, Box<dyn std::error::Error>> {
             //Construct the replica znode path (before the sequence number is added)
@@ -564,27 +582,16 @@ mod replica_manager {
             match pred {
                 Some(pred_znode) => {
                     let full_path = format!("{}/{}", self.base_path, pred_znode);
-                    let result = self.zk_instance.get_data(&full_path, false);
-
-                    match result {
-                        Ok(node_data) => {
-                            let data_str = String::from_utf8(node_data.0)?;
-                            let address = Replica::get_replica_addr(&data_str)?;
-
-                            println!("pred address: {}", address);
-                            Ok(())
-                        }
-                        _ => {
-                            println!("znode '{}' contains no data", full_path);
-                            Ok(())
-                        }
-                    }
+                    let address = self.get_node_address(full_path)?;
+                    println!("znode address: {}", address);
+                    Ok(())
                 }
                 _ => {
                     println!("No pred");
                     Ok(())
                 }
             }
+
         }
     }
 }
