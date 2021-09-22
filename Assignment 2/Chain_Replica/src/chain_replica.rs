@@ -20,7 +20,7 @@ use std::io::{Error, ErrorKind};
 use std::sync::{Arc, RwLock};
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use tokio::sync::oneshot;
+use tokio::{sync::oneshot, task::JoinHandle, task::spawn};
 use tonic::{transport::Server, transport::server, Request, Response, Status};
 use zookeeper::{Acl, CreateMode, Watcher, WatchedEvent, ZooKeeper, ZkState};
 
@@ -68,19 +68,15 @@ impl HeadChainReplica for HeadChainReplicaService {
 
 pub struct HeadServerManager {
     data: Arc<RwLock<HashMap<String, i32>>>,
-    sender: oneshot::Sender<()>,
-    receiver: oneshot::Receiver<()>,
+    join_handle: Option<JoinHandle<()>>,
 }
 
 impl HeadServerManager {
     pub fn new(data: Arc<RwLock<HashMap<String, i32>>>)
     -> Result<HeadServerManager, Box<dyn std::error::Error>> {
-        let (sender, receiver) = oneshot::channel();
-
         Ok(HeadServerManager {
             data: data,
-            sender: sender,
-            receiver: receiver,
+            join_handle: None,
         })
     }
 }
@@ -96,11 +92,9 @@ impl GRpcServer for HeadServerManager {
     }
 
     fn stop(self) -> Result<(), Box<dyn std::error::Error>> {
-        let result = self.sender.send(());
-
-        match result {
-            Err(_) => return Err(Error::new(ErrorKind::Other, format!("Failed to shut down head server")).into()),
-            _ => Ok(()),
+        match self.join_handle {
+            Some(handle) => { handle.abort(); Ok(()) }
+            None => return Err(Error::new(ErrorKind::Other, format!("Cannot stop a server that isn't running.")).into()),
         }
     }
 }
@@ -128,19 +122,15 @@ impl TailChainReplica for TailChainReplicaService {
 
 pub struct TailServerManager {
     data: Arc<RwLock<HashMap<String, i32>>>,
-    sender: oneshot::Sender<()>,
-    receiver: oneshot::Receiver<()>,
+    join_handle: Option<JoinHandle<()>>,
 }
 
 impl TailServerManager {
     pub fn new(data: Arc<RwLock<HashMap<String, i32>>>)
     -> Result<TailServerManager, Box<dyn std::error::Error>> {
-        let (sender, receiver) = oneshot::channel();
-
         Ok(TailServerManager {
             data: data,
-            sender: sender,
-            receiver: receiver,
+            join_handle: None,
         })
     }
 }
@@ -156,11 +146,9 @@ impl GRpcServer for TailServerManager {
     }
 
     fn stop(self) -> Result<(), Box<dyn std::error::Error>> {
-        let result = self.sender.send(());
-
-        match result {
-            Err(_) => return Err(Error::new(ErrorKind::Other, format!("Failed to shut down tail server")).into()),
-            _ => Ok(()),
+        match self.join_handle {
+            Some(handle) => { handle.abort(); Ok(()) }
+            None => return Err(Error::new(ErrorKind::Other, format!("Cannot stop a server that isn't running.")).into()),
         }
     }
 }
@@ -206,19 +194,15 @@ impl Replica for ReplicaService {
 
 pub struct ReplicaServerManager {
     data: Arc<RwLock<HashMap<String, i32>>>,
-    sender: oneshot::Sender<()>,
-    receiver: oneshot::Receiver<()>,
+    join_handle: Option<JoinHandle<()>>,
 }
 
 impl ReplicaServerManager {
     pub fn new(data: Arc<RwLock<HashMap<String, i32>>>)
     -> Result<ReplicaServerManager, Box<dyn std::error::Error>> {
-        let (sender, receiver) = oneshot::channel();
-
         Ok(ReplicaServerManager {
             data: data,
-            sender: sender,
-            receiver: receiver,
+            join_handle: None,
         })
     }
 }
@@ -234,11 +218,9 @@ impl GRpcServer for ReplicaServerManager {
     }
 
     fn stop(self) -> Result<(), Box<dyn std::error::Error>> {
-        let result = self.sender.send(());
-
-        match result {
-            Err(_) => return Err(Error::new(ErrorKind::Other, format!("Failed to shut down replica server")).into()),
-            _ => Ok(()),
+        match self.join_handle {
+            Some(handle) => { handle.abort(); Ok(()) }
+            None => return Err(Error::new(ErrorKind::Other, format!("Cannot stop a server that isn't running.")).into()),
         }
     }
 }
@@ -340,9 +322,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let replica_server = ReplicaServerManager::new(data.clone())?;
     replica_server.start(socket.clone());
 
-    head_server.stop()?;
-    tail_server.stop()?;
-    replica_server.stop()?;
+    // head_server.stop()?;
+    // tail_server.stop()?;
+    // replica_server.stop()?;
 
     loop {
 
