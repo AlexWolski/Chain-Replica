@@ -68,6 +68,7 @@ pub struct replica_data {
 
 pub struct HeadChainReplicaService {
     shared_data: Arc<replica_data>,
+    active: Arc<RwLock<bool>>,
 }
 
 #[tonic::async_trait]
@@ -87,16 +88,18 @@ impl HeadChainReplica for HeadChainReplicaService {
 pub struct HeadServerManager {
     //Service data
     shared_data: Arc<replica_data>,
+    active: Arc<RwLock<bool>>,
     //Server data
     join_handle: Option<JoinHandle<()>>,
     running: bool,
 }
 
 impl HeadServerManager {
-    pub fn new(shared_data: Arc<replica_data>)
+    pub fn new(shared_data: Arc<replica_data>, active: Arc<RwLock<bool>>)
     -> Result<HeadServerManager, Box<dyn std::error::Error>> {
         Ok(HeadServerManager {
             shared_data: shared_data.clone(),
+            active: active.clone(),
             join_handle: None,
             running: false,
         })
@@ -108,6 +111,7 @@ impl GRpcServer for HeadServerManager {
     fn start(&mut self, socket: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         let head_service = HeadChainReplicaService {
             shared_data: self.shared_data.clone(),
+            active: self.active.clone(),
         };
 
         let head_server = Server::builder().add_service(HeadChainReplicaServer::new(head_service));
@@ -141,6 +145,7 @@ impl GRpcServer for HeadServerManager {
 
 pub struct TailChainReplicaService {
     shared_data: Arc<replica_data>,
+    active: Arc<RwLock<bool>>,
 }
 
 #[tonic::async_trait]
@@ -162,16 +167,18 @@ impl TailChainReplica for TailChainReplicaService {
 pub struct TailServerManager {
     //Service data
     shared_data: Arc<replica_data>,
+    active: Arc<RwLock<bool>>,
     //Server data
     join_handle: Option<JoinHandle<()>>,
     running: bool,
 }
 
 impl TailServerManager {
-    pub fn new(shared_data: Arc<replica_data>)
+    pub fn new(shared_data: Arc<replica_data>, active: Arc<RwLock<bool>>)
     -> Result<TailServerManager, Box<dyn std::error::Error>> {
         Ok(TailServerManager {
             shared_data: shared_data.clone(),
+            active: active.clone(),
             join_handle: None,
             running: false,
         })
@@ -183,6 +190,7 @@ impl GRpcServer for TailServerManager {
     fn start(&mut self, socket: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         let tail_service = TailChainReplicaService {
             shared_data: self.shared_data.clone(),
+            active: self.active.clone(),
         };
 
         let tail_server = Server::builder().add_service(TailChainReplicaServer::new(tail_service));
@@ -216,6 +224,7 @@ impl GRpcServer for TailServerManager {
 
 pub struct ReplicaService {
     shared_data: Arc<replica_data>,
+    active: Arc<RwLock<bool>>,
 }
 
 #[tonic::async_trait]
@@ -255,16 +264,18 @@ impl Replica for ReplicaService {
 pub struct ReplicaServerManager {
     //Service data
     shared_data: Arc<replica_data>,
+    active: Arc<RwLock<bool>>,
     //Server data
     join_handle: Option<JoinHandle<()>>,
     running: bool,
 }
 
 impl ReplicaServerManager {
-    pub fn new(shared_data: Arc<replica_data>)
+    pub fn new(shared_data: Arc<replica_data>, active: Arc<RwLock<bool>>)
     -> Result<ReplicaServerManager, Box<dyn std::error::Error>> {
         Ok(ReplicaServerManager {
             shared_data: shared_data.clone(),
+            active: active.clone(),
             join_handle: None,
             running: false,
         })
@@ -276,6 +287,7 @@ impl GRpcServer for ReplicaServerManager {
     fn start(&mut self, socket: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         let replica_service = ReplicaService {
             shared_data: self.shared_data.clone(),
+            active: self.active.clone(),
         };
         
         let replica_server = Server::builder().add_service(ReplicaServer::new(replica_service));
@@ -372,6 +384,9 @@ mod replica_manager {
         head_server: HeadServerManager,
         tail_server: TailServerManager,
         replica_server: ReplicaServerManager,
+        head_active: Arc<RwLock<bool>>,
+        tail_active: Arc<RwLock<bool>>,
+        replica_active: Arc<RwLock<bool>>
     }
 
     impl Replica {
@@ -577,20 +592,27 @@ mod replica_manager {
             	succ_addr: Arc::new(RwLock::new(Option::<String>::None)),
             });
 
-            //Create servers for the head, tail, and replica service
-            let head_server = HeadServerManager::new(shared_data.clone())?;
-            let tail_server = TailServerManager::new(shared_data.clone())?;
-            let replica_server = ReplicaServerManager::new(shared_data.clone())?;
+            //Server status info
+            let head_active = Arc::new(RwLock::new(false));
+            let tail_active = Arc::new(RwLock::new(false));
+            let replica_active =Arc::new(RwLock::new(false));
 
             Ok(Replica{
+            	//ZooKeeper data
                 zk_instance: instance,
                 socket: socket,
                 base_path: base_path.to_string(),
                 replica_id: Replica::get_replica_id(&znode)?,
+                //Data shared by all services
                 shared_data: shared_data.clone(),
-                head_server: head_server,
-                tail_server: tail_server,
-                replica_server: replica_server,
+                //Instantiate Servers
+                head_server: HeadServerManager::new(shared_data.clone(), head_active.clone())?,
+                tail_server: TailServerManager::new(shared_data.clone(), tail_active.clone())?,
+                replica_server: ReplicaServerManager::new(shared_data.clone(), replica_active.clone())?,
+                //Server status info
+                head_active: head_active.clone(),
+                tail_active: tail_active.clone(),
+                replica_active: replica_active.clone(),
             })
         }
 
@@ -623,7 +645,6 @@ mod replica_manager {
                     Ok(())
                 }
             }
-
         }
     }
 }
