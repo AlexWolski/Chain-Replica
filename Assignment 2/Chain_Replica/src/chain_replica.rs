@@ -267,11 +267,9 @@ mod zk_manager {
         Ok(instance)
     }
 
-    pub fn create(instance: &mut ZooKeeper, control_path: &str, znode_data: &str, create_mode: CreateMode)
-    -> Result<(), Box<dyn std::error::Error>> {
-        let znode_path = format!("{}/{}", control_path, ZNODE_PREFIX);
-
-        let create_result = instance.create(&znode_path,
+    pub fn create(instance: &mut ZooKeeper, znode_path: &str, znode_data: &str, create_mode: CreateMode)
+    -> Result<String, Box<dyn std::error::Error>> {
+        let create_result = instance.create(znode_path,
             znode_data.as_bytes().to_vec(),
             Acl::open_unsafe().clone(),
             create_mode);
@@ -280,12 +278,15 @@ mod zk_manager {
         match create_result {
             Ok(_) => (),
             Err(_) => return Err(Error::new(ErrorKind::InvalidData,
-                format!("Unable to create the znode: {}", &znode_path)).into())
+                format!("Unable to create the znode: {}", znode_path)).into())
         };
 
-        println!("Successfully created zNode: {}", create_result.unwrap());
+        //Unwrap the full znode with the sequence number
+        let znode = create_result.unwrap();
 
-        Ok(())
+        println!("Successfully created zNode: {}", znode);
+
+        Ok(znode)
     }
 }
 
@@ -295,6 +296,7 @@ mod replica_manager {
     pub struct Replica {
         zk_instance: ZooKeeper,
         socket: SocketAddr,
+        base_path: String,
         head_server: HeadServerManager,
         tail_server: TailServerManager,
         replica_server: ReplicaServerManager,
@@ -312,22 +314,28 @@ mod replica_manager {
             }
         }
 
-        pub fn new(host_list: &str, control_path: &str, znode_data: &str, socket: SocketAddr, replica_data: Arc<RwLock<HashMap<String, i32>>>)
+        pub fn new(host_list: &str, base_path: &str, znode_data: &str, socket: SocketAddr, replica_data: Arc<RwLock<HashMap<String, i32>>>)
         -> Result<Replica, Box<dyn std::error::Error>> {
+            //Construct the replica znode path (before the sequence number is added)
+            let znode_path = format!("{}/{}", base_path, ZNODE_PREFIX);
+
             //Connect to the ZooKeeper host
             let mut instance = zk_manager::connect(host_list, Replica::print_conn_state, 5)?;
             //Create a new zNode for this replica
-            zk_manager::create(&mut instance, control_path, &znode_data, CreateMode::EphemeralSequential)?;
+            let znode = zk_manager::create(&mut instance, &znode_path, &znode_data, CreateMode::EphemeralSequential)?;
 
+            //Create servers for the head, tail, and replica service
             let mut head_server = HeadServerManager::new(replica_data.clone())?;
             let mut tail_server = TailServerManager::new(replica_data.clone())?;
             let mut replica_server = ReplicaServerManager::new(replica_data.clone())?;
 
+            //The replica service should always be running
             replica_server.start(socket)?;
 
             Ok(Replica{
                 zk_instance: instance,
                 socket: socket,
+                base_path: base_path.to_string(),
                 head_server: head_server,
                 tail_server: tail_server,
                 replica_server: replica_server,
@@ -347,7 +355,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if args.len() != 3
     {
-        println!("Correct Usage: chain_replica.rs ZOOKEEPER_HOST_PORT_LIST CONTROL_PATH");
+        println!("Correct Usage: chain_replica.rs ZOOKEEPER_HOST_PORT_LIST base_path");
         return Err(Error::new(ErrorKind::InvalidInput, "Invalid number of arguments").into());
     }
 
