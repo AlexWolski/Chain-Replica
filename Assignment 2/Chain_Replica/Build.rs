@@ -7,7 +7,7 @@ fn main() {
 
     tonic_build::configure()
         .build_server(true)
-        .build_client(false)
+        .build_client(true)
         .compile(proto_files, proto_dependencies)
         .expect("Error generating protobuf");
 }

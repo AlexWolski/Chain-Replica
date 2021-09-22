@@ -26,12 +26,15 @@ use zookeeper::{Acl, CreateMode, Watcher, WatchedEvent, ZooKeeper, ZkState};
 
 //Head
 use chain::head_chain_replica_server::{HeadChainReplica, HeadChainReplicaServer};
+use chain::head_chain_replica_client::HeadChainReplicaClient;
 use chain::{IncRequest, HeadResponse};
 //Tail
 use chain::tail_chain_replica_server::{TailChainReplica, TailChainReplicaServer};
+use chain::tail_chain_replica_client::TailChainReplicaClient;
 use chain::{GetRequest, GetResponse};
-//Replica Server
+//Replica
 use chain::replica_server::{Replica, ReplicaServer};
+use chain::replica_client::ReplicaClient;
 use chain::{UpdateRequest, UpdateResponse};
 use chain::{StateTransferRequest, StateTransferResponse};
 use chain::{AckRequest, AckResponse};
