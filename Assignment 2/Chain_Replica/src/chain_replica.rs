@@ -418,6 +418,75 @@ mod replica_manager {
             }
         }
 
+        fn get_pred(&self) -> Result<Option<String>, Box<dyn std::error::Error>> {
+            //Get all children of the base node
+            let result = self.zk_instance.get_children(&self.base_path, false);
+
+            //Handle a connection error
+            match result {
+                Ok(_) => (),
+                Err(_) => return Err(Error::new(ErrorKind::Other, format!("Failed to get children: {}", &self.base_path)).into())
+            };
+
+            let replica_list = result.as_ref().unwrap();
+            let last_index = replica_list.len() - 1;
+            let mut replica_index = 0;
+
+            for replica in replica_list.iter() {
+                let curr_replica_id = Replica::get_replica_id(&replica)?;
+
+                if curr_replica_id == self.replica_id {
+                    //The replica is the head
+                    if replica_index == last_index {
+                        return Ok(None);
+                    }
+                    //Return the predecessor
+                    else {
+                        return Ok(Some(replica_list[replica_index + 1].to_owned()));
+                    }
+                }
+
+                replica_index += 1;
+            }
+
+            //There is an issue with the replica list
+            Err(Error::new(ErrorKind::Other, format!("Invalid chain position: {}", replica_index)).into())
+        }
+
+        fn get_succ(&self) -> Result<Option<String>, Box<dyn std::error::Error>> {
+            //Get all children of the base node
+            let result = self.zk_instance.get_children(&self.base_path, false);
+
+            //Handle a connection error
+            match result {
+                Ok(_) => (),
+                Err(_) => return Err(Error::new(ErrorKind::Other, format!("Failed to get children: {}", &self.base_path)).into())
+            };
+
+            let replica_list = result.as_ref().unwrap();
+            let mut replica_index = 0;
+
+            for replica in replica_list.iter() {
+                let curr_replica_id = Replica::get_replica_id(&replica)?;
+
+                if curr_replica_id == self.replica_id {
+                    //The replica is the tail
+                    if replica_index == 0 {
+                        return Ok(None);
+                    }
+                    //Return the predecessor
+                    else {
+                        return Ok(Some(replica_list[replica_index - 1].to_owned()));
+                    }
+                }
+
+                replica_index += 1;
+            }
+
+            //There is an issue with the replica list
+            Err(Error::new(ErrorKind::Other, format!("Invalid chain position: {}", replica_index)).into())
+        }
+
         pub fn new(host_list: &str, base_path: &str, znode_data: &str, socket: SocketAddr)
         -> Result<Replica, Box<dyn std::error::Error>> {
             //Construct the replica znode path (before the sequence number is added)
@@ -432,9 +501,9 @@ mod replica_manager {
             let replica_data = Arc::new(RwLock::new(HashMap::<String, i32>::new()));
 
             //Create servers for the head, tail, and replica service
-            let mut head_server = HeadServerManager::new(replica_data.clone())?;
-            let mut tail_server = TailServerManager::new(replica_data.clone())?;
-            let mut replica_server = ReplicaServerManager::new(replica_data.clone())?;
+            let head_server = HeadServerManager::new(replica_data.clone())?;
+            let tail_server = TailServerManager::new(replica_data.clone())?;
+            let replica_server = ReplicaServerManager::new(replica_data.clone())?;
 
             Ok(Replica{
                 zk_instance: instance,
