@@ -20,6 +20,7 @@ use std::io::{Error, ErrorKind};
 use std::sync::{Arc, RwLock};
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use tokio::sync::oneshot;
 use tonic::{transport::Server, transport::server, Request, Response, Status};
 use zookeeper::{Acl, CreateMode, Watcher, WatchedEvent, ZooKeeper, ZkState};
 
@@ -43,7 +44,8 @@ static NAME : &str = "Alex Wolski";
 
 #[tonic::async_trait]
 pub trait GRpcServer {
-    async fn start(self, socket : SocketAddr) -> Result<(), Box<dyn std::error::Error>>;
+    async fn start(&self, socket: SocketAddr) -> Result<(), Box<dyn std::error::Error>>;
+    fn stop(self) -> Result<(), Box<dyn std::error::Error>>;
 }
 
 pub struct HeadChainReplicaService {
@@ -65,26 +67,41 @@ impl HeadChainReplica for HeadChainReplicaService {
 }
 
 pub struct HeadServerManager {
-    server: server::Router<HeadChainReplicaServer<HeadChainReplicaService>, server::Unimplemented>,
+    data: Arc<RwLock<HashMap<String, i32>>>,
+    sender: oneshot::Sender<()>,
+    receiver: oneshot::Receiver<()>,
 }
 
 impl HeadServerManager {
     pub fn new(data: Arc<RwLock<HashMap<String, i32>>>)
     -> Result<HeadServerManager, Box<dyn std::error::Error>> {
-        let head_service = HeadChainReplicaService { data: data };
-        let head_server = Server::builder().add_service(HeadChainReplicaServer::new(head_service));
+        let (sender, receiver) = oneshot::channel();
 
         Ok(HeadServerManager {
-            server: head_server,
+            data: data,
+            sender: sender,
+            receiver: receiver,
         })
     }
 }
 
 #[tonic::async_trait]
 impl GRpcServer for HeadServerManager {
-    async fn start(self, socket : SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
-        self.server.serve(socket).await?;
+    async fn start(&self, socket: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
+        let head_service = HeadChainReplicaService { data: self.data.clone() };
+        let head_server = Server::builder().add_service(HeadChainReplicaServer::new(head_service));
+
+        head_server.serve(socket).await?;
         Ok(())
+    }
+
+    fn stop(self) -> Result<(), Box<dyn std::error::Error>> {
+        let result = self.sender.send(());
+
+        match result {
+            Err(_) => return Err(Error::new(ErrorKind::Other, format!("Failed to shut down head server")).into()),
+            _ => Ok(()),
+        }
     }
 }
 
@@ -110,26 +127,41 @@ impl TailChainReplica for TailChainReplicaService {
 
 
 pub struct TailServerManager {
-    server: server::Router<TailChainReplicaServer<TailChainReplicaService>, server::Unimplemented>,
+    data: Arc<RwLock<HashMap<String, i32>>>,
+    sender: oneshot::Sender<()>,
+    receiver: oneshot::Receiver<()>,
 }
 
 impl TailServerManager {
     pub fn new(data: Arc<RwLock<HashMap<String, i32>>>)
     -> Result<TailServerManager, Box<dyn std::error::Error>> {
-        let tail_service = TailChainReplicaService { data: data };
-        let tail_server = Server::builder().add_service(TailChainReplicaServer::new(tail_service));
+        let (sender, receiver) = oneshot::channel();
 
         Ok(TailServerManager {
-            server: tail_server,
+            data: data,
+            sender: sender,
+            receiver: receiver,
         })
     }
 }
 
 #[tonic::async_trait]
 impl GRpcServer for TailServerManager {
-    async fn start(self, socket : SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
-        self.server.serve(socket).await?;
+    async fn start(&self, socket: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
+        let tail_service = TailChainReplicaService { data: self.data.clone() };
+        let tail_server = Server::builder().add_service(TailChainReplicaServer::new(tail_service));
+
+        tail_server.serve(socket).await?;
         Ok(())
+    }
+
+    fn stop(self) -> Result<(), Box<dyn std::error::Error>> {
+        let result = self.sender.send(());
+
+        match result {
+            Err(_) => return Err(Error::new(ErrorKind::Other, format!("Failed to shut down tail server")).into()),
+            _ => Ok(()),
+        }
     }
 }
 
@@ -173,26 +205,41 @@ impl Replica for ReplicaService {
 }
 
 pub struct ReplicaServerManager {
-    server: server::Router<ReplicaServer<ReplicaService>, server::Unimplemented>,
+    data: Arc<RwLock<HashMap<String, i32>>>,
+    sender: oneshot::Sender<()>,
+    receiver: oneshot::Receiver<()>,
 }
 
 impl ReplicaServerManager {
     pub fn new(data: Arc<RwLock<HashMap<String, i32>>>)
     -> Result<ReplicaServerManager, Box<dyn std::error::Error>> {
-        let replica_service = ReplicaService { data: data };
-        let replica_server = Server::builder().add_service(ReplicaServer::new(replica_service));
+        let (sender, receiver) = oneshot::channel();
 
         Ok(ReplicaServerManager {
-            server: replica_server,
+            data: data,
+            sender: sender,
+            receiver: receiver,
         })
     }
 }
 
 #[tonic::async_trait]
 impl GRpcServer for ReplicaServerManager {
-    async fn start(self, socket : SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
-        self.server.serve(socket).await?;
+    async fn start(&self, socket: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
+        let replica_service = ReplicaService { data: self.data.clone() };
+        let replica_server = Server::builder().add_service(ReplicaServer::new(replica_service));
+
+        replica_server.serve(socket).await?;
         Ok(())
+    }
+
+    fn stop(self) -> Result<(), Box<dyn std::error::Error>> {
+        let result = self.sender.send(());
+
+        match result {
+            Err(_) => return Err(Error::new(ErrorKind::Other, format!("Failed to shut down replica server")).into()),
+            _ => Ok(()),
+        }
     }
 }
 
@@ -269,7 +316,7 @@ mod zk_manager {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let socket : SocketAddr = SOCKET_ADDRESS.parse()?;
+    let socket: SocketAddr = SOCKET_ADDRESS.parse()?;
     let args: Vec<String> = env::args().collect();
 
     //Shared hashmap protected by a mutex
@@ -292,6 +339,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tail_server.start(socket.clone());
     let replica_server = ReplicaServerManager::new(data.clone())?;
     replica_server.start(socket.clone());
+
+    head_server.stop()?;
+    tail_server.stop()?;
+    replica_server.stop()?;
 
     loop {
 
