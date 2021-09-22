@@ -42,6 +42,8 @@ static SOCKET_ADDRESS: &str = "[::1]:50051";
 static NAME: &str = "Alex Wolski";
 //The znode name prefix for all replicas
 static ZNODE_PREFIX: &str = "replica-";
+//The length of the sequence number ZooKeeper adds to znodes
+static SEQUENCE_LEN: u32 = 10;
 
 
 #[tonic::async_trait]
@@ -297,6 +299,7 @@ mod replica_manager {
         zk_instance: ZooKeeper,
         socket: SocketAddr,
         base_path: String,
+        replica_id: u32,
         head_server: HeadServerManager,
         tail_server: TailServerManager,
         replica_server: ReplicaServerManager,
@@ -311,6 +314,22 @@ mod replica_manager {
                 ZkState::Closed =>
                     println!("Disconnected from ZooKeeper host"),
                 _ => (),
+            }
+        }
+
+        //Returns the sequence number of a replica znode
+        fn get_replica_id(znode: String) -> Result<u32, Box<dyn std::error::Error>> {
+            let mut copy = znode.clone();
+            //Find the starting posiiton of the znode sequence
+            let split_point = copy.len() - (SEQUENCE_LEN as usize);
+            let id_string = copy.split_off(split_point);
+
+            let replica_id = id_string.parse::<u32>();
+
+            match replica_id {
+                Ok(id) => Ok(id),
+                _ => return Err(Error::new(ErrorKind::Other,
+                    format!("znode sequence '{}' is formatted incorrectly", id_string)).into())
             }
         }
 
@@ -336,6 +355,7 @@ mod replica_manager {
                 zk_instance: instance,
                 socket: socket,
                 base_path: base_path.to_string(),
+                replica_id: Replica::get_replica_id(znode)?,
                 head_server: head_server,
                 tail_server: tail_server,
                 replica_server: replica_server,
