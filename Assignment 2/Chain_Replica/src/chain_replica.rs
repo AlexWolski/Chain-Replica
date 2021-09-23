@@ -64,6 +64,7 @@ pub struct replica_data {
     pub ack: Arc<RwLock<Vec<u32>>>,
     pub pred_addr: Arc<RwLock<Option<String>>>,
     pub succ_addr: Arc<RwLock<Option<String>>>,
+    pub new_tail: Arc<RwLock<bool>>,
 }
 
 pub struct HeadChainReplicaService {
@@ -75,23 +76,16 @@ pub struct HeadChainReplicaService {
 impl HeadChainReplica for HeadChainReplicaService {
     async fn increment(&self, request: Request<IncRequest>) ->
     Result<Response<HeadResponse>, Status> {
-        //Get the guard from the active variable
-        match self.active.read() {
-            //Read succeeded
-            Ok(active_guard) => {
-                if *active_guard {
-                    println!("Received Inc Request. Key: {}, Value: {}", request.get_ref().key, request.get_ref().inc_value);
-                    let head_response = chain::HeadResponse { rc: 0 };
-                    Ok(Response::new(head_response))
-                }
-                else {
-                    let head_response = chain::HeadResponse { rc: 1 };
-                    Ok(Response::new(head_response))
-                }
-            }
+        let active_read = self.active.read().unwrap();
 
-            //Read failed
-            _ => panic!("Failed to read 'active' of HeadChainReplica.")
+        if *active_read {
+            println!("Received Inc Request. Key: {}, Value: {}", request.get_ref().key, request.get_ref().inc_value);
+            let head_response = chain::HeadResponse { rc: 0 };
+            Ok(Response::new(head_response))
+        }
+        else {
+            let head_response = chain::HeadResponse { rc: 1 };
+            Ok(Response::new(head_response))
         }
     }
 }
@@ -163,29 +157,21 @@ pub struct TailChainReplicaService {
 impl TailChainReplica for TailChainReplicaService {
     async fn get(&self, request: Request<GetRequest>) ->
     Result<Response<GetResponse>, Status> {
+        let active_read =  self.active.read().unwrap();
 
-    	//Get the guard from the active variable
-        match self.active.read() {
-        	//Read succeeded
-            Ok(active_guard) => {
-                if *active_guard {
-                    println!("Received Get Request. Key: {}", request.get_ref().key);
+        if *active_read {
+            println!("Received Get Request. Key: {}", request.get_ref().key);
 
-                    let tail_response = chain::GetResponse {
-                        rc: 0,
-                        value: 0,
-                    };
+            let tail_response = chain::GetResponse {
+                rc: 0,
+                value: 0,
+            };
 
-                    Ok(Response::new(tail_response))
-                }
-                else {
-                    let tail_response = chain::GetResponse { rc: 1, value : 0 };
-                    Ok(Response::new(tail_response))
-                }
-            }
-
-            //Read failed
-            _ => panic!("Failed to read 'active' of HeadChainReplica.")
+            Ok(Response::new(tail_response))
+        }
+        else {
+            let tail_response = chain::GetResponse { rc: 1, value : 0 };
+            Ok(Response::new(tail_response))
         }
     }
 }
@@ -252,20 +238,23 @@ impl GRpcServer for TailServerManager {
 pub struct ReplicaService {
     shared_data: Arc<replica_data>,
     active: Arc<RwLock<bool>>,
-    new_tail: bool,
 }
 
 #[tonic::async_trait]
 impl Replica for ReplicaService {
     async fn update(&self, request: Request<UpdateRequest>) ->
     Result<Response<UpdateResponse>, Status> {
-    	//If the replica is a new tail, otify the predecesor to send a state transfer
-    	if self.new_tail {
+        let new_tail_read = self.shared_data.new_tail.read().unwrap();
+
+        //If the replica is a new tail, notify the predecesor to send a state transfer
+        if *new_tail_read {
             let update_response = chain::UpdateResponse { rc: 1 };
             Ok(Response::new(update_response))
-    	}
-    	else {
-            println!("Received Update Request. Key: {}, newValue: {}, xID: {}", request.get_ref().key, request.get_ref().new_value, request.get_ref().xid);
+        }
+        //Otherwise, forward the update request
+        else {
+            println!("Received Update Request. Key: {}, newValue: {}, xID: {}",
+                request.get_ref().key, request.get_ref().new_value, request.get_ref().xid);
             let update_response = chain::UpdateResponse { rc: 0 };
             Ok(Response::new(update_response))
         }
@@ -273,14 +262,24 @@ impl Replica for ReplicaService {
 
     async fn state_transfer(&self, request: Request<StateTransferRequest>) ->
     Result<Response<StateTransferResponse>, Status> {
-    	if self.new_tail {
+        let new_tail_read = self.shared_data.new_tail.read().unwrap();
+
+        //If this replica is a new node, accept the state transfer
+        if *new_tail_read {
             println!("Received State Transfer Request. xID: {}", request.get_ref().xid);
             let transfer_response = chain::StateTransferResponse { rc: 0 };
-            //To-Do: Change new_tail to an Arc so we can mutate it
-            //self.new_tail = false;
+
+            //Release the read lock
+            drop(new_tail_read);
+            //Aquire a write lock and set new_tail to false
+            match self.shared_data.new_tail.write() {
+                Ok(mut new_tail_write) => *new_tail_write = false,
+                _ => panic!("Failed to write 'new_tail'")
+            }
+
             Ok(Response::new(transfer_response))
         }
-        //Notify the predecessor that this replica isn't a new tail
+        //Otherwise, notify the predecessor that this replica isn't a new tail
         else {
             let transfer_response = chain::StateTransferResponse { rc: 1 };
             Ok(Response::new(transfer_response))
@@ -324,8 +323,6 @@ impl GRpcServer for ReplicaServerManager {
         let replica_service = ReplicaService {
             shared_data: self.shared_data.clone(),
             active: self.active.clone(),
-            //Assume that the replica is always added to the end of the chain
-            new_tail: true,
         };
         
         let replica_server = Server::builder().add_service(ReplicaServer::new(replica_service));
@@ -628,6 +625,8 @@ mod replica_manager {
                 ack: Arc::new(RwLock::new(Vec::<u32>::new())),
                 pred_addr: Arc::new(RwLock::new(Option::<String>::None)),
                 succ_addr: Arc::new(RwLock::new(Option::<String>::None)),
+                //Assume that every node is added to the end of the chain
+                new_tail: Arc::new(RwLock::new(false)),
             });
 
             //Server status info
