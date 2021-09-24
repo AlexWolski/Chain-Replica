@@ -28,9 +28,10 @@ use chain::{AckRequest, AckResponse};
 
 #[tonic::async_trait]
 pub trait GRpcServer {
-    fn start(&mut self, socket: SocketAddr) -> Result<(), Box<dyn std::error::Error>>;
-    fn stop(&mut self) -> Result<(), Box<dyn std::error::Error>>;
-    fn is_running(&self) -> bool;
+    fn start(&mut self, socket: SocketAddr, paused: bool) -> Result<(), Box<dyn std::error::Error>>;
+    fn stop(self) -> Result<(), Box<dyn std::error::Error>>;
+    fn pause(&mut self) -> Result<(), Box<dyn std::error::Error>>;
+    fn resume(&mut self) -> Result<(), Box<dyn std::error::Error>>;
 }
 
 pub struct replica_data {
@@ -44,16 +45,16 @@ pub struct replica_data {
 
 pub struct HeadChainReplicaService {
     shared_data: Arc<replica_data>,
-    active: Arc<RwLock<bool>>,
+    is_paused: Arc<RwLock<bool>>,
 }
 
 #[tonic::async_trait]
 impl HeadChainReplica for HeadChainReplicaService {
     async fn increment(&self, request: Request<IncRequest>) ->
     Result<Response<HeadResponse>, Status> {
-        let active_read = self.active.read().unwrap();
+        let is_paused_read = self.is_paused.read().unwrap();
 
-        if *active_read {
+        if *is_paused_read {
             println!("Received Inc Request. Key: {}, Value: {}", request.get_ref().key, request.get_ref().inc_value);
             let head_response = chain::HeadResponse { rc: 0 };
             Ok(Response::new(head_response))
@@ -68,48 +69,53 @@ impl HeadChainReplica for HeadChainReplicaService {
 pub struct HeadServerManager {
     //Service data
     shared_data: Arc<replica_data>,
-    active: Arc<RwLock<bool>>,
+    is_paused: Arc<RwLock<bool>>,
     //Server data
     join_handle: Option<JoinHandle<()>>,
-    running: bool,
 }
 
 impl HeadServerManager {
-    pub fn new(shared_data: Arc<replica_data>, active: Arc<RwLock<bool>>)
+    pub fn new(shared_data: Arc<replica_data>)
     -> Result<HeadServerManager, Box<dyn std::error::Error>> {
         Ok(HeadServerManager {
             shared_data: shared_data.clone(),
-            active: active.clone(),
+            is_paused: Arc::new(RwLock::new(true)),
             join_handle: None,
-            running: false,
         })
     }
 }
 
 #[tonic::async_trait]
 impl GRpcServer for HeadServerManager {
-    fn start(&mut self, socket: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
+    fn start(&mut self, socket: SocketAddr, paused: bool) -> Result<(), Box<dyn std::error::Error>> {
+        //Set the status of the server
+        if paused {
+            self.pause();
+        }
+        else {
+            self.resume();
+        }
+
+        //Create the service struct
         let head_service = HeadChainReplicaService {
             shared_data: self.shared_data.clone(),
-            active: self.active.clone(),
+            is_paused: self.is_paused.clone(),
         };
 
+        //Start the server
         let head_server = Server::builder().add_service(HeadChainReplicaServer::new(head_service));
 
         let _ = self.join_handle.insert(tokio::spawn(async move {
             let _ = head_server.serve(socket).await;
         }));
 
-        self.running = true;
-
         Ok(())
     }
 
-    fn stop(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        match &self.join_handle {
+    fn stop(self) -> Result<(), Box<dyn std::error::Error>> {
+        match self.join_handle {
             Some(handle) => {
                 handle.abort();
-                self.running = false;
                 Ok(())
             }
 
@@ -117,24 +123,32 @@ impl GRpcServer for HeadServerManager {
         }
     }
 
-    fn is_running(&self) -> bool {
-        return self.running;
+    fn pause(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let mut is_paused_write = self.is_paused.write().unwrap();
+        *is_paused_write = true;
+        Ok(())
+    }
+
+    fn resume(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let mut is_paused_write = self.is_paused.write().unwrap();
+        *is_paused_write = false;
+        Ok(())
     }
 }
 
 
 pub struct TailChainReplicaService {
     shared_data: Arc<replica_data>,
-    active: Arc<RwLock<bool>>,
+    is_paused: Arc<RwLock<bool>>,
 }
 
 #[tonic::async_trait]
 impl TailChainReplica for TailChainReplicaService {
     async fn get(&self, request: Request<GetRequest>) ->
     Result<Response<GetResponse>, Status> {
-        let active_read =  self.active.read().unwrap();
+        let is_paused_read =  self.is_paused.read().unwrap();
 
-        if *active_read {
+        if *is_paused_read {
             println!("Received Get Request. Key: {}", request.get_ref().key);
 
             let tail_response = chain::GetResponse {
@@ -155,48 +169,53 @@ impl TailChainReplica for TailChainReplicaService {
 pub struct TailServerManager {
     //Service data
     shared_data: Arc<replica_data>,
-    active: Arc<RwLock<bool>>,
+    is_paused: Arc<RwLock<bool>>,
     //Server data
     join_handle: Option<JoinHandle<()>>,
-    running: bool,
 }
 
 impl TailServerManager {
-    pub fn new(shared_data: Arc<replica_data>, active: Arc<RwLock<bool>>)
+    pub fn new(shared_data: Arc<replica_data>)
     -> Result<TailServerManager, Box<dyn std::error::Error>> {
         Ok(TailServerManager {
             shared_data: shared_data.clone(),
-            active: active.clone(),
+            is_paused: Arc::new(RwLock::new(true)),
             join_handle: None,
-            running: false,
         })
     }
 }
 
 #[tonic::async_trait]
 impl GRpcServer for TailServerManager {
-    fn start(&mut self, socket: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
+    fn start(&mut self, socket: SocketAddr, paused: bool) -> Result<(), Box<dyn std::error::Error>> {
+        //Set the status of the server
+        if paused {
+            self.pause();
+        }
+        else {
+            self.resume();
+        }
+
+        //Create the service struct
         let tail_service = TailChainReplicaService {
             shared_data: self.shared_data.clone(),
-            active: self.active.clone(),
+            is_paused: self.is_paused.clone(),
         };
 
+        //Start the server
         let tail_server = Server::builder().add_service(TailChainReplicaServer::new(tail_service));
 
         let _ = self.join_handle.insert(tokio::spawn(async move {
             let _ = tail_server.serve(socket).await;
         }));
 
-        self.running = true;
-
         Ok(())
     }
 
-    fn stop(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        match &self.join_handle {
+    fn stop(self) -> Result<(), Box<dyn std::error::Error>> {
+        match self.join_handle {
             Some(handle) => {
                 handle.abort();
-                self.running = false;
                 Ok(())
             }
 
@@ -204,15 +223,23 @@ impl GRpcServer for TailServerManager {
         }
     }
 
-    fn is_running(&self) -> bool {
-        return self.running;
+    fn pause(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let mut is_paused_write = self.is_paused.write().unwrap();
+        *is_paused_write = true;
+        Ok(())
+    }
+
+    fn resume(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let mut is_paused_write = self.is_paused.write().unwrap();
+        *is_paused_write = false;
+        Ok(())
     }
 }
 
 
 pub struct ReplicaService {
     shared_data: Arc<replica_data>,
-    active: Arc<RwLock<bool>>,
+    is_paused: Arc<RwLock<bool>>,
 }
 
 #[tonic::async_trait]
@@ -247,10 +274,8 @@ impl Replica for ReplicaService {
             //Release the read lock
             drop(new_tail_read);
             //Aquire a write lock and set new_tail to false
-            match self.shared_data.new_tail.write() {
-                Ok(mut new_tail_write) => *new_tail_write = false,
-                _ => panic!("Failed to write 'new_tail'")
-            }
+            let mut new_tail_write = self.shared_data.new_tail.write().unwrap();
+            *new_tail_write = false;
 
             Ok(Response::new(transfer_response))
         }
@@ -274,48 +299,53 @@ impl Replica for ReplicaService {
 pub struct ReplicaServerManager {
     //Service data
     shared_data: Arc<replica_data>,
-    active: Arc<RwLock<bool>>,
+    is_paused: Arc<RwLock<bool>>,
     //Server data
     join_handle: Option<JoinHandle<()>>,
-    running: bool,
 }
 
 impl ReplicaServerManager {
-    pub fn new(shared_data: Arc<replica_data>, active: Arc<RwLock<bool>>)
+    pub fn new(shared_data: Arc<replica_data>)
     -> Result<ReplicaServerManager, Box<dyn std::error::Error>> {
         Ok(ReplicaServerManager {
             shared_data: shared_data.clone(),
-            active: active.clone(),
+            is_paused: Arc::new(RwLock::new(true)),
             join_handle: None,
-            running: false,
         })
     }
 }
 
 #[tonic::async_trait]
 impl GRpcServer for ReplicaServerManager {
-    fn start(&mut self, socket: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
+    fn start(&mut self, socket: SocketAddr, paused: bool) -> Result<(), Box<dyn std::error::Error>> {
+        //Set the status of the server
+        if paused {
+            self.pause();
+        }
+        else {
+            self.resume();
+        }
+
+        //Create the service struct
         let replica_service = ReplicaService {
             shared_data: self.shared_data.clone(),
-            active: self.active.clone(),
+            is_paused: self.is_paused.clone(),
         };
         
+        //Start the server
         let replica_server = Server::builder().add_service(ReplicaServer::new(replica_service));
 
         let _ = self.join_handle.insert(tokio::spawn(async move {
             let _ = replica_server.serve(socket).await;
         }));
 
-        self.running = true;
-
         Ok(())
     }
 
-    fn stop(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        match &self.join_handle {
+    fn stop(self) -> Result<(), Box<dyn std::error::Error>> {
+        match self.join_handle {
             Some(handle) => {
                 handle.abort();
-                self.running = false;
                 Ok(())
             }
 
@@ -323,7 +353,15 @@ impl GRpcServer for ReplicaServerManager {
         }
     }
 
-    fn is_running(&self) -> bool {
-        self.running
+    fn pause(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let mut is_paused_write = self.is_paused.write().unwrap();
+        *is_paused_write = true;
+        Ok(())
+    }
+
+    fn resume(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let mut is_paused_write = self.is_paused.write().unwrap();
+        *is_paused_write = false;
+        Ok(())
     }
 }

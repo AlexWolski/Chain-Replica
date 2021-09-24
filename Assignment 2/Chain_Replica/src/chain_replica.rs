@@ -40,9 +40,6 @@ mod replica_manager {
         head_server: HeadServerManager,
         tail_server: TailServerManager,
         replica_server: ReplicaServerManager,
-        head_active: Arc<RwLock<bool>>,
-        tail_active: Arc<RwLock<bool>>,
-        replica_active: Arc<RwLock<bool>>
     }
 
     impl Replica {
@@ -252,11 +249,6 @@ mod replica_manager {
                 new_tail: Arc::new(RwLock::new(false)),
             });
 
-            //Server status info
-            let head_active = Arc::new(RwLock::new(false));
-            let tail_active = Arc::new(RwLock::new(false));
-            let replica_active =Arc::new(RwLock::new(false));
-
             Ok(Replica{
                 //ZooKeeper data
                 zk_instance: instance,
@@ -266,30 +258,25 @@ mod replica_manager {
                 //Data shared by all services
                 shared_data: shared_data.clone(),
                 //Instantiate Servers
-                head_server: HeadServerManager::new(shared_data.clone(), head_active.clone())?,
-                tail_server: TailServerManager::new(shared_data.clone(), tail_active.clone())?,
-                replica_server: ReplicaServerManager::new(shared_data.clone(), replica_active.clone())?,
-                //Server status info
-                head_active: head_active.clone(),
-                tail_active: tail_active.clone(),
-                replica_active: replica_active.clone(),
+                head_server: HeadServerManager::new(shared_data.clone())?,
+                tail_server: TailServerManager::new(shared_data.clone())?,
+                replica_server: ReplicaServerManager::new(shared_data.clone())?,
             })
         }
 
         pub fn start(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-            //The replica service should always be running
-            //And we will always add the server as a new tail, so tail should be running
-            println!("Starting replica server");
-            self.replica_server.start(self.socket.clone())?;
-            println!("Starting tail server");
-            self.tail_server.start(self.socket.clone())?;
+            //The replica service should always be active
+            //And the tail service should be active since replicas are added to the end of the chain
+            self.replica_server.start(self.socket.clone(), false)?;
+            self.tail_server.start(self.socket.clone(), false)?;
+            self.head_server.start(self.socket.clone(), true)?;
 
-            //Run the head and tail servers based on the position of the replica in the chain
+            //Active the head service if the replica is at the front of the chain
             if self.is_head()? {
-                println!("Starting head server");
-            self.head_server.start(self.socket.clone())?;
+                self.head_server.resume();
             }
 
+            //Debugging
             let pred = self.get_pred()?;
 
             match pred {
