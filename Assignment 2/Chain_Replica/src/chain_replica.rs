@@ -19,7 +19,7 @@ mod replica_manager {
     use std::collections::HashMap;
     use std::net::SocketAddr;
     use zookeeper::{CreateMode, ZooKeeper, ZkState};
-    use grpc_manager::{replica_data, GRpcServer, HeadServerManager, TailServerManager, ReplicaServerManager};
+    use grpc_manager::{ReplicaData, GRpcServer, HeadServerManager, TailServerManager, ReplicaServerManager};
 
     //Name of the author
     static NAME: &str = "Alex Wolski";
@@ -36,7 +36,7 @@ mod replica_manager {
         socket: SocketAddr,
         base_path: String,
         replica_id: u32,
-        shared_data: Arc<replica_data>,
+        shared_data: Arc<ReplicaData>,
         head_server: HeadServerManager,
         tail_server: TailServerManager,
         replica_server: ReplicaServerManager,
@@ -239,7 +239,7 @@ mod replica_manager {
             let znode = zk_manager::create(&mut instance, &znode_path, &znode_data, CreateMode::EphemeralSequential)?;
 
             //Create the shared data for the servers
-            let shared_data = Arc::new(replica_data{
+            let shared_data = Arc::new(ReplicaData{
                 database: Arc::new(RwLock::new(HashMap::<String, i32>::new())),
                 sent: Arc::new(RwLock::new(Vec::<(String, i32, u32)>::new())),
                 ack: Arc::new(RwLock::new(Vec::<u32>::new())),
@@ -265,16 +265,26 @@ mod replica_manager {
         }
 
         pub fn start(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+            let mut run_head = false;
+
+            if self.is_head()? {
+                run_head = true;
+            }
+
             //The replica service should always be active
-            //And the tail service should be active since replicas are added to the end of the chain
+            //Since replicas are added to the end of the chian, the rail service should be active
+            //The head service should only be active when there are no other replicas
             self.replica_server.start(self.socket.clone(), false)?;
             self.tail_server.start(self.socket.clone(), false)?;
-            self.head_server.start(self.socket.clone(), true)?;
+            self.head_server.start(self.socket.clone(), run_head)?;
 
-            //Active the head service if the replica is at the front of the chain
-            if self.is_head()? {
-                self.head_server.resume();
-            }
+            Ok(())
+        }
+
+        pub fn stop(self) -> Result<(), Box<dyn std::error::Error>> {
+            self.replica_server.stop()?;
+            self.tail_server.stop()?;
+            self.head_server.stop()?;
 
             Ok(())
         }
@@ -290,6 +300,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     use std::env;
     use std::io::{Error, ErrorKind};
     use std::net::SocketAddr;
+    use tokio::signal;
 
     let args: Vec<String> = env::args().collect();
 
@@ -302,7 +313,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut replica = replica_manager::Replica::new(&args[1], &args[2], socket_address)?;
     replica.start()?;
 
-    loop{}
+    match signal::ctrl_c().await {
+        Ok(()) => {
+            replica.stop()?;
+            println!("Shutting replica down\n");
+            Ok(())
+        },
 
-    Ok(())
+        Err(err) => { panic!("Failed to listen for a shutdown signal") },
+    }
 }

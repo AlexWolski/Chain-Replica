@@ -34,7 +34,7 @@ pub trait GRpcServer {
     fn resume(&mut self) -> Result<(), Box<dyn std::error::Error>>;
 }
 
-pub struct replica_data {
+pub struct ReplicaData {
     pub database: Arc<RwLock<HashMap<String, i32>>>,
     pub sent: Arc<RwLock<Vec<(String, i32, u32)>>>,
     pub ack: Arc<RwLock<Vec<u32>>>,
@@ -44,7 +44,7 @@ pub struct replica_data {
 }
 
 pub struct HeadChainReplicaService {
-    shared_data: Arc<replica_data>,
+    shared_data: Arc<ReplicaData>,
     is_paused: Arc<RwLock<bool>>,
 }
 
@@ -70,14 +70,14 @@ impl HeadChainReplica for HeadChainReplicaService {
 
 pub struct HeadServerManager {
     //Service data
-    shared_data: Arc<replica_data>,
+    shared_data: Arc<ReplicaData>,
     is_paused: Arc<RwLock<bool>>,
     //Server data
     join_handle: Option<JoinHandle<()>>,
 }
 
 impl HeadServerManager {
-    pub fn new(shared_data: Arc<replica_data>)
+    pub fn new(shared_data: Arc<ReplicaData>)
     -> Result<HeadServerManager, Box<dyn std::error::Error>> {
         Ok(HeadServerManager {
             shared_data: shared_data.clone(),
@@ -92,10 +92,10 @@ impl GRpcServer for HeadServerManager {
     fn start(&mut self, socket: SocketAddr, paused: bool) -> Result<(), Box<dyn std::error::Error>> {
         //Set the status of the server
         if paused {
-            self.pause();
+            self.pause()?;
         }
         else {
-            self.resume();
+            self.resume()?;
         }
 
         //Create the service struct
@@ -146,7 +146,7 @@ impl GRpcServer for HeadServerManager {
 
 
 pub struct TailChainReplicaService {
-    shared_data: Arc<replica_data>,
+    shared_data: Arc<ReplicaData>,
     is_paused: Arc<RwLock<bool>>,
 }
 
@@ -177,14 +177,14 @@ impl TailChainReplica for TailChainReplicaService {
 
 pub struct TailServerManager {
     //Service data
-    shared_data: Arc<replica_data>,
+    shared_data: Arc<ReplicaData>,
     is_paused: Arc<RwLock<bool>>,
     //Server data
     join_handle: Option<JoinHandle<()>>,
 }
 
 impl TailServerManager {
-    pub fn new(shared_data: Arc<replica_data>)
+    pub fn new(shared_data: Arc<ReplicaData>)
     -> Result<TailServerManager, Box<dyn std::error::Error>> {
         Ok(TailServerManager {
             shared_data: shared_data.clone(),
@@ -199,10 +199,10 @@ impl GRpcServer for TailServerManager {
     fn start(&mut self, socket: SocketAddr, paused: bool) -> Result<(), Box<dyn std::error::Error>> {
         //Set the status of the server
         if paused {
-            self.pause();
+            self.pause()?;
         }
         else {
-            self.resume();
+            self.resume()?;
         }
 
         //Create the service struct
@@ -253,7 +253,7 @@ impl GRpcServer for TailServerManager {
 
 
 pub struct ReplicaService {
-    shared_data: Arc<replica_data>,
+    shared_data: Arc<ReplicaData>,
     is_paused: Arc<RwLock<bool>>,
 }
 
@@ -318,14 +318,14 @@ impl Replica for ReplicaService {
 
 pub struct ReplicaServerManager {
     //Service data
-    shared_data: Arc<replica_data>,
+    shared_data: Arc<ReplicaData>,
     is_paused: Arc<RwLock<bool>>,
     //Server data
     join_handle: Option<JoinHandle<()>>,
 }
 
 impl ReplicaServerManager {
-    pub fn new(shared_data: Arc<replica_data>)
+    pub fn new(shared_data: Arc<ReplicaData>)
     -> Result<ReplicaServerManager, Box<dyn std::error::Error>> {
         Ok(ReplicaServerManager {
             shared_data: shared_data.clone(),
@@ -340,10 +340,10 @@ impl GRpcServer for ReplicaServerManager {
     fn start(&mut self, socket: SocketAddr, paused: bool) -> Result<(), Box<dyn std::error::Error>> {
         //Set the status of the server
         if paused {
-            self.pause();
+            self.pause()?;
         }
         else {
-            self.resume();
+            self.resume()?;
         }
 
         //Create the service struct
