@@ -55,7 +55,9 @@ impl HeadChainReplica for HeadChainReplicaService {
         let is_paused_read = self.is_paused.read().unwrap();
 
         if *is_paused_read {
+            #[cfg(debug_assertions)]
             println!("Received Inc Request. Key: {}, Value: {}", request.get_ref().key, request.get_ref().inc_value);
+
             let head_response = chain::HeadResponse { rc: 0 };
             Ok(Response::new(head_response))
         }
@@ -124,12 +126,18 @@ impl GRpcServer for HeadServerManager {
     }
 
     fn pause(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        #[cfg(debug_assertions)]
+        println!("Pausing head service");
+
         let mut is_paused_write = self.is_paused.write().unwrap();
         *is_paused_write = true;
         Ok(())
     }
 
     fn resume(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        #[cfg(debug_assertions)]
+        println!("Resuming head service");
+        
         let mut is_paused_write = self.is_paused.write().unwrap();
         *is_paused_write = false;
         Ok(())
@@ -149,6 +157,7 @@ impl TailChainReplica for TailChainReplicaService {
         let is_paused_read =  self.is_paused.read().unwrap();
 
         if *is_paused_read {
+            #[cfg(debug_assertions)]
             println!("Received Get Request. Key: {}", request.get_ref().key);
 
             let tail_response = chain::GetResponse {
@@ -224,12 +233,18 @@ impl GRpcServer for TailServerManager {
     }
 
     fn pause(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        #[cfg(debug_assertions)]
+        println!("Pausing tail service");
+
         let mut is_paused_write = self.is_paused.write().unwrap();
         *is_paused_write = true;
         Ok(())
     }
 
     fn resume(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        #[cfg(debug_assertions)]
+        println!("Resuming tail service");
+        
         let mut is_paused_write = self.is_paused.write().unwrap();
         *is_paused_write = false;
         Ok(())
@@ -255,8 +270,10 @@ impl Replica for ReplicaService {
         }
         //Otherwise, forward the update request
         else {
+            #[cfg(debug_assertions)]
             println!("Received Update Request. Key: {}, newValue: {}, xID: {}",
                 request.get_ref().key, request.get_ref().new_value, request.get_ref().xid);
+
             let update_response = chain::UpdateResponse { rc: 0 };
             Ok(Response::new(update_response))
         }
@@ -268,7 +285,9 @@ impl Replica for ReplicaService {
 
         //If this replica is a new node, accept the state transfer
         if *new_tail_read {
+            #[cfg(debug_assertions)]
             println!("Received State Transfer Request. xID: {}", request.get_ref().xid);
+
             let transfer_response = chain::StateTransferResponse { rc: 0 };
 
             //Release the read lock
@@ -288,6 +307,7 @@ impl Replica for ReplicaService {
 
     async fn ack(&self, request: Request<AckRequest>) ->
     Result<Response<AckResponse>, Status> {
+        #[cfg(debug_assertions)]
         println!("Received State Transfer Request. xID: {}", request.get_ref().xid);
 
         let ack_response = chain::AckResponse {};
@@ -354,12 +374,18 @@ impl GRpcServer for ReplicaServerManager {
     }
 
     fn pause(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        #[cfg(debug_assertions)]
+        println!("Pausing replica service");
+        
         let mut is_paused_write = self.is_paused.write().unwrap();
         *is_paused_write = true;
         Ok(())
     }
 
     fn resume(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        #[cfg(debug_assertions)]
+        println!("Resuming replica service");
+        
         let mut is_paused_write = self.is_paused.write().unwrap();
         *is_paused_write = false;
         Ok(())

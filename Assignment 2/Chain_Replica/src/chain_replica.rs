@@ -276,21 +276,7 @@ mod replica_manager {
                 self.head_server.resume();
             }
 
-            //Debugging
-            let pred = self.get_pred()?;
-
-            match pred {
-                Some(pred_znode) => {
-                    let full_path = format!("{}/{}", self.base_path, pred_znode);
-                    let address = self.get_node_address(full_path)?;
-                    println!("znode address: {}", address);
-                    Ok(())
-                }
-                _ => {
-                    println!("No pred");
-                    Ok(())
-                }
-            }
+            Ok(())
         }
     }
 }
