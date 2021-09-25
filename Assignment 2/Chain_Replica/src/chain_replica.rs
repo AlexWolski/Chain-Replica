@@ -57,6 +57,13 @@ mod replica_manager {
         //Returns the sequence number of a replica znode
         fn get_replica_id(znode: &str) -> Result<u32, Box<dyn std::error::Error>> {
             let mut znode_str = znode.to_string();
+
+            //Check that the znode is long enough to contain a sequence number
+            if znode_str.len() <= (SEQUENCE_LEN as usize) {
+                return Err(Error::new(ErrorKind::InvalidInput,
+                    format!("The znode '{}' is missing a sequence number", znode_str)).into())
+            }
+
             //Find the starting posiiton of the znode sequence
             let split_point = znode_str.len() - (SEQUENCE_LEN as usize);
             let id_string = znode_str.split_off(split_point);
@@ -64,7 +71,7 @@ mod replica_manager {
 
             match replica_id {
                 Ok(id) => Ok(id),
-                _ => return Err(Error::new(ErrorKind::Other,
+                _ => return Err(Error::new(ErrorKind::InvalidInput,
                     format!("znode sequence '{}' is formatted incorrectly", id_string)).into())
             }
         }
@@ -77,11 +84,11 @@ mod replica_manager {
             match result {
                 Some(position) => {
                     if position == 0 {
-                        return Err(Error::new(ErrorKind::Other,
+                        return Err(Error::new(ErrorKind::InvalidData,
                             format!("znode data is missing an address")).into())
                     }
                 },
-                None => return Err(Error::new(ErrorKind::Other,
+                None => return Err(Error::new(ErrorKind::InvalidData,
                     format!("znode data '{}' is formatted incorrectly", znode_data)).into())
             }
 
@@ -93,8 +100,8 @@ mod replica_manager {
         }
 
         // Takes a znode path and returns the address
-        fn get_node_address(&self, znode: String) -> Result<String, Box<dyn std::error::Error>> {
-                let result = self.zk_instance.get_data(&znode, false);
+        fn get_node_address(&self, znode: &str) -> Result<String, Box<dyn std::error::Error>> {
+                let result = self.zk_instance.get_data(znode, false);
 
                 match result {
                     Ok(node_data) => {
@@ -104,7 +111,7 @@ mod replica_manager {
                         Ok(address)
                     }
                     _ => {
-                        Err(Error::new(ErrorKind::Other,
+                        Err(Error::new(ErrorKind::InvalidData,
                             format!("Failed to get the data of znode: {}", znode)).into())
                     }
                 }
@@ -118,7 +125,7 @@ mod replica_manager {
             //Handle a connection error
             match result {
                 Ok(_) => (),
-                Err(_) => return Err(Error::new(ErrorKind::Other, format!("Failed to get children: {}", &self.base_path)).into())
+                Err(_) => return Err(Error::new(ErrorKind::Other, format!("Failed to get children in znode: {}", &self.base_path)).into())
             };
 
             let replica_list = result.as_ref().unwrap();
@@ -139,7 +146,7 @@ mod replica_manager {
             //Handle a connection error
             match result {
                 Ok(_) => (),
-                Err(_) => return Err(Error::new(ErrorKind::Other, format!("Failed to get children: {}", &self.base_path)).into())
+                Err(_) => return Err(Error::new(ErrorKind::Other, format!("Failed to get children in znode: {}", &self.base_path)).into())
             };
 
             let replica_list = result.as_ref().unwrap();
@@ -161,7 +168,7 @@ mod replica_manager {
             //Handle a connection error
             match result {
                 Ok(_) => (),
-                Err(_) => return Err(Error::new(ErrorKind::Other, format!("Failed to get children: {}", &self.base_path)).into())
+                Err(_) => return Err(Error::new(ErrorKind::Other, format!("Failed to get children in znode: {}", &self.base_path)).into())
             };
 
             let replica_list = result.as_ref().unwrap();
@@ -185,7 +192,7 @@ mod replica_manager {
             }
 
             //There is an issue with the replica list
-            Err(Error::new(ErrorKind::Other, format!("Invalid chain position: {}", replica_index)).into())
+            Err(Error::new(ErrorKind::InvalidData, format!("Invalid chain position: {}", replica_index)).into())
         }
 
 
@@ -196,7 +203,7 @@ mod replica_manager {
             //Handle a connection error
             match result {
                 Ok(_) => (),
-                Err(_) => return Err(Error::new(ErrorKind::Other, format!("Failed to get children: {}", &self.base_path)).into())
+                Err(_) => return Err(Error::new(ErrorKind::Other, format!("Failed to get children in znode: {}", &self.base_path)).into())
             };
 
             let replica_list = result.as_ref().unwrap();
@@ -238,8 +245,12 @@ mod replica_manager {
 
             //Connect to the ZooKeeper host
             let mut instance = zk_manager::connect(host_list, Replica::print_conn_state, 5)?;
-            //Create a new zNode for this replica
+            //Recursively create the znodes in the base path
+            let _ = zk_manager::create_recursive(&mut instance, base_path, "", CreateMode::Persistent)?;
+
+            //Create the znode for this replica
             let znode = zk_manager::create(&mut instance, &znode_path, &znode_data, CreateMode::EphemeralSequential)?;
+            println!("Successfully created zNode: {}", znode);
 
             //Create the shared data for the servers
             let shared_data = Arc::new(ReplicaData{
