@@ -224,14 +224,17 @@ mod replica_manager {
             Err(Error::new(ErrorKind::Other, format!("Invalid chain position: {}", replica_index)).into())
         }
 
-        pub fn new(host_list: &str, base_path: &str, socket_address: &str)
+        pub fn new(host_list: &str, base_path: &str, server_port: &str)
         -> Result<Replica, Box<dyn std::error::Error>> {
+            //Combine the port with the loopback address to run the server locally
+            let server_addr = format!("[::1]:{}", server_port);
+
             //Construct the replica znode path (before the sequence number is added)
             let znode_path = format!("{}/{}", base_path, ZNODE_PREFIX);
             //Construct the contents of the znode
-            let znode_data = format!("{}{}{}", socket_address, ZNODE_DELIM, NAME);
-            //Convert the socket address string to a SocketAddr type
-            let socket = socket_address.parse()?;
+            let znode_data = format!("{}{}{}", server_addr, ZNODE_DELIM, NAME);
+            //Convert the server address string to a SocketAddr type
+            let socket = server_addr.parse()?;
 
             //Connect to the ZooKeeper host
             let mut instance = zk_manager::connect(host_list, Replica::print_conn_state, 5)?;
@@ -243,6 +246,7 @@ mod replica_manager {
                 database: Arc::new(RwLock::new(HashMap::<String, i32>::new())),
                 sent: Arc::new(RwLock::new(Vec::<(String, i32, u32)>::new())),
                 ack: Arc::new(RwLock::new(Vec::<u32>::new())),
+                my_addr: server_addr,
                 pred_addr: Arc::new(RwLock::new(Option::<String>::None)),
                 succ_addr: Arc::new(RwLock::new(Option::<String>::None)),
                 //Assume that every node is added to the end of the chain
@@ -295,7 +299,7 @@ mod replica_manager {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //The port all services will run on
-    let socket_address = "[::1]:50051";
+    let server_port = "50051";
 
     use std::env;
     use std::io::{Error, ErrorKind};
@@ -310,7 +314,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err(Error::new(ErrorKind::InvalidInput, "Invalid number of arguments").into());
     }
 
-    let mut replica = replica_manager::Replica::new(&args[1], &args[2], socket_address)?;
+    let mut replica = replica_manager::Replica::new(&args[1], &args[2], server_port)?;
     replica.start()?;
 
     match signal::ctrl_c().await {

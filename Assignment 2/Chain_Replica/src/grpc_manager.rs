@@ -38,6 +38,7 @@ pub struct ReplicaData {
     pub database: Arc<RwLock<HashMap<String, i32>>>,
     pub sent: Arc<RwLock<Vec<(String, i32, u32)>>>,
     pub ack: Arc<RwLock<Vec<u32>>>,
+    pub my_addr: String,
     pub pred_addr: Arc<RwLock<Option<String>>>,
     pub succ_addr: Arc<RwLock<Option<String>>>,
     pub new_tail: Arc<RwLock<bool>>,
