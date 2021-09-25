@@ -43,7 +43,6 @@ pub fn create_recursive(instance: &mut ZooKeeper, znode_path: &str, znode_data: 
 
     let mut path_split = znode_path.split("/").skip_while(|&s| s.is_empty());
     let mut curr_path = String::new();
-    let mut new_znode = String::new();
     let first_znode = format!("/{}", path_split.next().unwrap());
 
     //Create the first znode, if it doesn't exist

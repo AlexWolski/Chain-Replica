@@ -15,9 +15,11 @@ mod zk_manager;
 mod replica_manager {
     use super::*;
     use std::io::{Error, ErrorKind};
+    use std::ops::Range;
     use std::sync::{Arc, RwLock};
     use std::collections::HashMap;
-    use std::net::SocketAddr;
+    use std::net::{SocketAddr, IpAddr};
+    use local_ip_address::list_afinet_netifas;
     use zookeeper::{CreateMode, ZooKeeper, ZkState};
     use grpc_manager::{ReplicaData, GRpcServer, HeadServerManager, TailServerManager, ReplicaServerManager};
 
@@ -49,6 +51,81 @@ mod replica_manager {
                 ZkState::Closed =>
                     println!("Disconnected from ZooKeeper host"),
                 _ => (),
+            }
+        }
+
+        //Prompts a user for an integer between the given values
+        fn prompt_int(range: Range<i32>) -> Result<i32, Box<dyn std::error::Error>> {
+            let mut stdin = std::io::stdin();
+
+            loop {
+                let mut input = String::new();
+                let _ = stdin.read_line(&mut input)?;
+                //Discard the newline
+                input.pop();
+
+                match input.parse::<i32>() {
+                    Ok(integer) => {
+                        if range.contains(&integer) {
+                            return Ok(integer);
+                        }
+                        else {
+                            println!("Enter a value between {} and {}.", range.start, range.end)
+                        }
+                    }
+                    Err(_) => { println!("'{}' is not an integer. Try again.", input) }
+                }
+            }
+        }
+
+        //Prompts the user to choose a local ip address
+        fn prompt_local_ip() -> Result<String, Box<dyn std::error::Error>> {
+            //Get a vector of all network adapters on the machine
+            let interfaces = list_afinet_netifas().unwrap();
+            //Vector of valid ip addresses
+            let mut addresses = Vec::new();
+
+            //Find the valid addresses
+            for (name, ip) in interfaces.iter() {
+                if ip.is_ipv4() {
+                    let ip_str = ip.to_string();
+
+                    //See IBM documentation for private address ranges
+                    //https://www.ibm.com/docs/en/networkmanager/4.2.0?topic=translation-private-address-ranges
+                    if
+                    //Class A
+                    ip_str.starts_with("10.") |
+                    //Class B
+                    ip_str.starts_with("172.") |
+                    //Class C
+                    ip_str.starts_with("192.168.") {
+                        addresses.push(ip_str);
+                    }
+                }
+            }
+
+            match addresses.len() {
+                0 => Err(Error::new(ErrorKind::Other, "No valid local addresses found").into()),
+                1 => Ok(addresses[0].clone()),
+                len => {
+                    println!("\nSelect an address to listen to:");
+                    println!("-------------------------------");
+
+                    let mut index = 0;
+                    for ip in addresses.iter() {
+                        println!("{}: {}", index, ip);
+                        index += 1;
+                    }
+
+                    let selection_range = Range::<i32> {
+                        start: 0,
+                        end: addresses.len() as i32
+                    };
+
+                    let selection = Replica::prompt_int(selection_range)? as usize;
+
+                    Ok(addresses[selection].to_owned())
+                },
             }
         }
 
@@ -231,21 +308,21 @@ mod replica_manager {
 
         pub fn new(host_list: &str, base_path: &str, server_port: &str, name: &str)
         -> Result<Replica, Box<dyn std::error::Error>> {
-            //Combine the port with the loopback address to run the server locally
-            let server_addr = format!("[::1]:{}", server_port);
+            //Prompt the user for the ip address to run the server on
+            let local_ip = Replica::prompt_local_ip()?;
+            //Construct the server host and port
+            let server_addr = format!("{}:{}", local_ip, server_port);
+            let socket = server_addr.parse()?;
 
             //Construct the replica znode path (before the sequence number is added)
             let znode_path = format!("{}/{}", base_path, ZNODE_PREFIX);
             //Construct the contents of the znode
             let znode_data = format!("{}{}{}", server_addr, ZNODE_DELIM, name);
-            //Convert the server address string to a SocketAddr type
-            let socket = server_addr.parse()?;
 
             //Connect to the ZooKeeper host
             let mut instance = zk_manager::connect(host_list, Replica::print_conn_state, 5)?;
             //Recursively create the znodes in the base path
             let _ = zk_manager::create_recursive(&mut instance, base_path, "", CreateMode::Persistent)?;
-
             //Create the znode for this replica
             let znode = zk_manager::create(&mut instance, &znode_path, &znode_data, CreateMode::EphemeralSequential)?;
             println!("Successfully created zNode: {}", znode);
