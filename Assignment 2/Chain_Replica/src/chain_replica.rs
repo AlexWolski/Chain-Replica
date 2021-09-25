@@ -21,8 +21,6 @@ mod replica_manager {
     use zookeeper::{CreateMode, ZooKeeper, ZkState};
     use grpc_manager::{ReplicaData, GRpcServer, HeadServerManager, TailServerManager, ReplicaServerManager};
 
-    //Name of the author
-    static NAME: &str = "Alex Wolski";
     //The delimiting character separating the address and name in the znode data
     static ZNODE_DELIM: &str = "\n";
     //The znode name prefix for all replicas
@@ -231,7 +229,7 @@ mod replica_manager {
             Err(Error::new(ErrorKind::Other, format!("Invalid chain position: {}", replica_index)).into())
         }
 
-        pub fn new(host_list: &str, base_path: &str, server_port: &str)
+        pub fn new(host_list: &str, base_path: &str, server_port: &str, name: &str)
         -> Result<Replica, Box<dyn std::error::Error>> {
             //Combine the port with the loopback address to run the server locally
             let server_addr = format!("[::1]:{}", server_port);
@@ -239,7 +237,7 @@ mod replica_manager {
             //Construct the replica znode path (before the sequence number is added)
             let znode_path = format!("{}/{}", base_path, ZNODE_PREFIX);
             //Construct the contents of the znode
-            let znode_data = format!("{}{}{}", server_addr, ZNODE_DELIM, NAME);
+            let znode_data = format!("{}{}{}", server_addr, ZNODE_DELIM, name);
             //Convert the server address string to a SocketAddr type
             let socket = server_addr.parse()?;
 
@@ -311,6 +309,8 @@ mod replica_manager {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //The port all services will run on
     let server_port = "50051";
+    //The name used in the znode data
+    let name = "Alex Wolski";
 
     use std::env;
     use std::io::{Error, ErrorKind};
@@ -325,7 +325,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err(Error::new(ErrorKind::InvalidInput, "Invalid number of arguments").into());
     }
 
-    let mut replica = replica_manager::Replica::new(&args[1], &args[2], server_port)?;
+    let mut replica = replica_manager::Replica::new(&args[1], &args[2], server_port, name)?;
     replica.start()?;
 
     match signal::ctrl_c().await {
