@@ -278,10 +278,10 @@ mod replica_manager {
         }
 
         pub fn start(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-            let mut run_head = false;
+            let mut pause_head = true;
 
             if self.is_head()? {
-                run_head = true;
+                pause_head = false;
             }
 
             //The replica service should always be active
@@ -289,7 +289,7 @@ mod replica_manager {
             //The head service should only be active when there are no other replicas
             self.replica_server.start(self.socket.clone(), false)?;
             self.tail_server.start(self.socket.clone(), false)?;
-            self.head_server.start(self.socket.clone(), run_head)?;
+            self.head_server.start(self.socket.clone(), pause_head)?;
 
             Ok(())
         }
