@@ -335,6 +335,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         },
 
-        Err(err) => { panic!("Failed to listen for a shutdown signal") },
+        Err(err) => { Err(Error::new(ErrorKind::Other, "Failed to listen for a shutdown signal").into()) },
     }
 }
