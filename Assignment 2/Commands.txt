@@ -1,0 +1,8 @@
+ZooKeeper:
+java -jar zookeeper-dev-fatjar.jar server zk_config.cfg
+
+Client:
+python3 chain_client.py "10.40.16.73:2181" "/demo" <Comamnd> <Args>
+
+Replica:
+cargo run "10.40.16.73:2181" "/demo"
