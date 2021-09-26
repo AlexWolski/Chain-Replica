@@ -19,7 +19,7 @@ mod replica_manager {
     use std::sync::{Arc, RwLock};
     use std::collections::HashMap;
     use std::net::{SocketAddr, IpAddr};
-    use local_ip_address::list_afinet_netifas;
+    use local_ip_address::{local_ip, list_afinet_netifas};
     use zookeeper::{CreateMode, ZooKeeper, ZkState};
     use grpc_manager::{ReplicaData, GRpcServer, HeadServerManager, TailServerManager, ReplicaServerManager};
 
@@ -308,8 +308,12 @@ mod replica_manager {
 
         pub fn new(host_list: &str, base_path: &str, server_port: &str, name: &str)
         -> Result<Replica, Box<dyn std::error::Error>> {
-            //Prompt the user for the ip address to run the server on
-            let local_ip = Replica::prompt_local_ip()?;
+            //If no local IP address can be found, prompt the user to choose an IP address
+            let local_ip = match local_ip() {
+                Ok(ip) => ip.to_string(),
+                Err(_) => Replica::prompt_local_ip()?
+            };
+
             //Construct the server host and port
             let server_addr = format!("{}:{}", local_ip, server_port);
             let socket = server_addr.parse()?;
@@ -326,6 +330,7 @@ mod replica_manager {
             //Create the znode for this replica
             let znode = zk_manager::create(&mut instance, &znode_path, &znode_data, CreateMode::EphemeralSequential)?;
             println!("Successfully created zNode: {}", znode);
+            println!("Listening on: {}", server_addr);
 
             //Create the shared data for the servers
             let shared_data = Arc::new(ReplicaData{
