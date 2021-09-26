@@ -377,9 +377,9 @@ mod replica_manager {
         }
 
         pub fn stop(self) -> Result<(), Box<dyn std::error::Error>> {
-            self.replica_server.stop()?;
-            self.tail_server.stop()?;
-            self.head_server.stop()?;
+            self.replica_server.stop();
+            self.tail_server.stop();
+            self.head_server.stop();
 
             Ok(())
         }

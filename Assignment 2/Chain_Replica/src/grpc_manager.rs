@@ -4,12 +4,11 @@ pub mod chain {
 }
 
 //Libraries
-use std::io::{Error, ErrorKind};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::net::SocketAddr;
-use tokio::{task::JoinHandle};
 use tonic::{transport::Server, Request, Response, Status};
+use triggered::{Trigger, Listener};
 
 //Head
 use chain::head_chain_replica_server::{HeadChainReplica, HeadChainReplicaServer};
@@ -29,7 +28,7 @@ use chain::{AckRequest, AckResponse};
 #[tonic::async_trait]
 pub trait GRpcServer {
     fn start(&mut self, socket: SocketAddr, paused: bool) -> Result<(), Box<dyn std::error::Error>>;
-    fn stop(self) -> Result<(), Box<dyn std::error::Error>>;
+    fn stop(self);
     fn pause(&mut self) -> Result<(), Box<dyn std::error::Error>>;
     fn resume(&mut self) -> Result<(), Box<dyn std::error::Error>>;
 }
@@ -74,16 +73,20 @@ pub struct HeadServerManager {
     shared_data: Arc<ReplicaData>,
     is_paused: Arc<RwLock<bool>>,
     //Server data
-    join_handle: Option<JoinHandle<()>>,
+    shutdown_trigger: Trigger,
+    shutdown_listener: Listener,
 }
 
 impl HeadServerManager {
     pub fn new(shared_data: Arc<ReplicaData>)
     -> Result<HeadServerManager, Box<dyn std::error::Error>> {
+        let (trigger, listener) = triggered::trigger();
+
         Ok(HeadServerManager {
             shared_data: shared_data.clone(),
             is_paused: Arc::new(RwLock::new(true)),
-            join_handle: None,
+            shutdown_trigger: trigger,
+            shutdown_listener: listener,
         })
     }
 }
@@ -107,23 +110,17 @@ impl GRpcServer for HeadServerManager {
 
         //Start the server
         let head_server = Server::builder().add_service(HeadChainReplicaServer::new(head_service));
+        let listener = self.shutdown_listener.clone();
 
-        let _ = self.join_handle.insert(tokio::spawn(async move {
-            let _ = head_server.serve(socket).await;
-        }));
+        let _ = tokio::spawn(async move {
+            let _ = head_server.serve_with_shutdown(socket, listener).await;
+        });
 
         Ok(())
     }
 
-    fn stop(self) -> Result<(), Box<dyn std::error::Error>> {
-        match self.join_handle {
-            Some(handle) => {
-                handle.abort();
-                Ok(())
-            }
-
-            None => return Err(Error::new(ErrorKind::Other, format!("Cannot stop a server that isn't running.")).into()),
-        }
+    fn stop(self) {
+        self.shutdown_trigger.trigger();
     }
 
     fn pause(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -181,16 +178,20 @@ pub struct TailServerManager {
     shared_data: Arc<ReplicaData>,
     is_paused: Arc<RwLock<bool>>,
     //Server data
-    join_handle: Option<JoinHandle<()>>,
+    shutdown_trigger: Trigger,
+    shutdown_listener: Listener,
 }
 
 impl TailServerManager {
     pub fn new(shared_data: Arc<ReplicaData>)
     -> Result<TailServerManager, Box<dyn std::error::Error>> {
+        let (trigger, listener) = triggered::trigger();
+
         Ok(TailServerManager {
             shared_data: shared_data.clone(),
             is_paused: Arc::new(RwLock::new(true)),
-            join_handle: None,
+            shutdown_trigger: trigger,
+            shutdown_listener: listener,
         })
     }
 }
@@ -214,23 +215,17 @@ impl GRpcServer for TailServerManager {
 
         //Start the server
         let tail_server = Server::builder().add_service(TailChainReplicaServer::new(tail_service));
+        let listener = self.shutdown_listener.clone();
 
-        let _ = self.join_handle.insert(tokio::spawn(async move {
-            let _ = tail_server.serve(socket).await;
-        }));
+        let _ = tokio::spawn(async move {
+            let _ =tail_server.serve_with_shutdown(socket, listener).await;
+        });
 
         Ok(())
     }
 
-    fn stop(self) -> Result<(), Box<dyn std::error::Error>> {
-        match self.join_handle {
-            Some(handle) => {
-                handle.abort();
-                Ok(())
-            }
-
-            None => return Err(Error::new(ErrorKind::Other, format!("Cannot stop a server that isn't running.")).into()),
-        }
+    fn stop(self) {
+        self.shutdown_trigger.trigger();
     }
 
     fn pause(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -322,16 +317,20 @@ pub struct ReplicaServerManager {
     shared_data: Arc<ReplicaData>,
     is_paused: Arc<RwLock<bool>>,
     //Server data
-    join_handle: Option<JoinHandle<()>>,
+    shutdown_trigger: Trigger,
+    shutdown_listener: Listener,
 }
 
 impl ReplicaServerManager {
     pub fn new(shared_data: Arc<ReplicaData>)
     -> Result<ReplicaServerManager, Box<dyn std::error::Error>> {
+        let (trigger, listener) = triggered::trigger();
+
         Ok(ReplicaServerManager {
             shared_data: shared_data.clone(),
             is_paused: Arc::new(RwLock::new(true)),
-            join_handle: None,
+            shutdown_trigger: trigger,
+            shutdown_listener: listener,
         })
     }
 }
@@ -355,23 +354,17 @@ impl GRpcServer for ReplicaServerManager {
         
         //Start the server
         let replica_server = Server::builder().add_service(ReplicaServer::new(replica_service));
+        let listener = self.shutdown_listener.clone();
 
-        let _ = self.join_handle.insert(tokio::spawn(async move {
-            let _ = replica_server.serve(socket).await;
-        }));
+        let _ = tokio::spawn(async move {
+            let _ = replica_server.serve_with_shutdown(socket, listener).await;
+        });
 
         Ok(())
     }
 
-    fn stop(self) -> Result<(), Box<dyn std::error::Error>> {
-        match self.join_handle {
-            Some(handle) => {
-                handle.abort();
-                Ok(())
-            }
-
-            None => return Err(Error::new(ErrorKind::Other, format!("Cannot stop a server that isn't running.")).into()),
-        }
+    fn stop(self) {
+        self.shutdown_trigger.trigger();
     }
 
     fn pause(&mut self) -> Result<(), Box<dyn std::error::Error>> {
