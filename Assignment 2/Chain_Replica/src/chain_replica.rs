@@ -18,7 +18,7 @@ mod replica_manager {
     use std::ops::Range;
     use std::sync::{Arc, RwLock};
     use std::collections::HashMap;
-    use std::net::{SocketAddr, IpAddr};
+    use std::net::{SocketAddr};
     use local_ip_address::{local_ip, list_afinet_netifas};
     use zookeeper::{CreateMode, ZooKeeper, ZkState};
     use grpc_manager::{ReplicaData, GRpcServer, HeadServerManager, TailServerManager, ReplicaServerManager};
@@ -56,7 +56,7 @@ mod replica_manager {
 
         //Prompts a user for an integer between the given values
         fn prompt_int(range: Range<i32>) -> Result<i32, Box<dyn std::error::Error>> {
-            let mut stdin = std::io::stdin();
+            let stdin = std::io::stdin();
 
             loop {
                 let mut input = String::new();
@@ -86,7 +86,7 @@ mod replica_manager {
             let mut addresses = Vec::new();
 
             //Find the valid addresses
-            for (name, ip) in interfaces.iter() {
+            for (_, ip) in interfaces.iter() {
                 if ip.is_ipv4() {
                     let ip_str = ip.to_string();
 
@@ -119,7 +119,7 @@ mod replica_manager {
 
                     let selection_range = Range::<i32> {
                         start: 0,
-                        end: addresses.len() as i32
+                        end: len as i32
                     };
 
                     let selection = Replica::prompt_int(selection_range)? as usize;
@@ -169,7 +169,7 @@ mod replica_manager {
 
             let delim_pos = result.unwrap() - 1;
             //Split the address into znode_data_str 
-            let name = znode_data_str.split_off(delim_pos);
+            let _ = znode_data_str.split_off(delim_pos);
 
             Ok(znode_data_str)
         }
@@ -396,7 +396,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     use std::env;
     use std::io::{Error, ErrorKind};
-    use std::net::SocketAddr;
     use tokio::signal;
 
     let args: Vec<String> = env::args().collect();
@@ -417,6 +416,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         },
 
-        Err(err) => { Err(Error::new(ErrorKind::Other, "Failed to listen for a shutdown signal").into()) },
+        Err(_) => { Err(Error::new(ErrorKind::Other, "Failed to listen for a shutdown signal").into()) },
     }
 }
