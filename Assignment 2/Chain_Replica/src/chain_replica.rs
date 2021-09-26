@@ -62,7 +62,7 @@ mod replica_manager {
                 let mut input = String::new();
                 let _ = stdin.read_line(&mut input)?;
                 //Discard the newline
-                input.pop();
+                input = input.replace(&['\n', '\r'][..], "");
 
                 match input.parse::<i32>() {
                     Ok(integer) => {
