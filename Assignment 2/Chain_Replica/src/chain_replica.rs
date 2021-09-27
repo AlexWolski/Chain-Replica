@@ -15,9 +15,9 @@ mod replica_manager {
     use super::*;
     use std::io::{Error, ErrorKind};
     use std::ops::Range;
-    use std::sync::{Arc, RwLock};
     use std::collections::HashMap;
     use std::net::{SocketAddr};
+    use async_std::sync::{Arc, RwLock};
     use local_ip_address::{local_ip, list_afinet_netifas};
     use zookeeper::{CreateMode, ZooKeeper, ZkState};
     use grpc_services::{ReplicaData, ServerManager};
@@ -371,14 +371,14 @@ mod replica_manager {
             })
         }
 
-        pub fn start(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        pub async fn start(&mut self) -> Result<(), Box<dyn std::error::Error>> {
             let mut pause_head = true;
 
             if self.is_head()? {
                 pause_head = false;
             }
 
-            self.server.start(self.socket.clone(), false, false, pause_head)?;
+            self.server.start(self.socket.clone(), false, false, pause_head).await?;
 
             Ok(())
         }
@@ -411,7 +411,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut replica = replica_manager::Replica::new(&args[1], &args[2], server_port, name)?;
-    replica.start()?;
+    replica.start().await?;
 
     match signal::ctrl_c().await {
         Ok(()) => {

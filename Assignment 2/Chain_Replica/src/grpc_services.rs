@@ -5,8 +5,8 @@ pub mod chain {
 
 //Libraries
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
 use std::net::SocketAddr;
+use async_std::sync::{Arc, RwLock};
 use tonic::{transport::Server, Request, Response, Status};
 use triggered::{Trigger, Listener};
 
@@ -41,7 +41,7 @@ pub struct HeadChainReplicaService {
 impl HeadChainReplica for HeadChainReplicaService {
     async fn increment(&self, request: Request<IncRequest>) ->
     Result<Response<HeadResponse>, Status> {
-        let is_paused_read = self.is_paused.read().unwrap();
+        let is_paused_read = self.is_paused.read().await;
 
         if *is_paused_read {
             #[cfg(debug_assertions)]
@@ -67,7 +67,7 @@ pub struct TailChainReplicaService {
 impl TailChainReplica for TailChainReplicaService {
     async fn get(&self, request: Request<GetRequest>) ->
     Result<Response<GetResponse>, Status> {
-        let is_paused_read =  self.is_paused.read().unwrap();
+        let is_paused_read =  self.is_paused.read().await;
 
         if *is_paused_read {
             #[cfg(debug_assertions)]
@@ -97,7 +97,7 @@ pub struct ReplicaService {
 impl Replica for ReplicaService {
     async fn update(&self, request: Request<UpdateRequest>) ->
     Result<Response<UpdateResponse>, Status> {
-        let new_tail_read = self.shared_data.new_tail.read().unwrap();
+        let new_tail_read = self.shared_data.new_tail.read().await;
 
         //If the replica is a new tail, notify the predecesor to send a state transfer
         if *new_tail_read {
@@ -117,7 +117,7 @@ impl Replica for ReplicaService {
 
     async fn state_transfer(&self, request: Request<StateTransferRequest>) ->
     Result<Response<StateTransferResponse>, Status> {
-        let new_tail_read = self.shared_data.new_tail.read().unwrap();
+        let new_tail_read = self.shared_data.new_tail.read().await;
 
         //If this replica is a new node, accept the state transfer
         if *new_tail_read {
@@ -129,7 +129,7 @@ impl Replica for ReplicaService {
             //Release the read lock
             drop(new_tail_read);
             //Aquire a write lock and set new_tail to false
-            let mut new_tail_write = self.shared_data.new_tail.write().unwrap();
+            let mut new_tail_write = self.shared_data.new_tail.write().await;
             *new_tail_write = false;
 
             Ok(Response::new(transfer_response))
@@ -185,17 +185,17 @@ impl ServerManager {
         })
     }
     
-    pub fn start(&mut self, socket: SocketAddr, head_paused: bool, tail_paused: bool, replica_paused: bool) ->
+    pub async fn start(&mut self, socket: SocketAddr, head_paused: bool, tail_paused: bool, replica_paused: bool) ->
     Result<(), Box<dyn std::error::Error>> {
         //Set the paused status of all three services
         if head_paused {
-            self.pause(ChainService::HEAD)?;
+            self.pause(ChainService::HEAD).await?;
         }
         if tail_paused {
-            self.pause(ChainService::TAIL)?;
+            self.pause(ChainService::TAIL).await?;
         }
         if replica_paused {
-            self.pause(ChainService::REPLICA)?;
+            self.pause(ChainService::REPLICA).await?;
         }
 
         //Create the service structs
@@ -234,28 +234,28 @@ impl ServerManager {
         self.shutdown_trigger.trigger();
     }
 
-    pub fn pause(&mut self, service: ChainService) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn pause(&mut self, service: ChainService) -> Result<(), Box<dyn std::error::Error>> {
         #[cfg(debug_assertions)]
         println!("Pausing head service");
 
         let mut paused_write = match service {
-            ChainService::HEAD => self.head_paused.write().unwrap(),
-            ChainService::TAIL => self.tail_paused.write().unwrap(),
-            ChainService::REPLICA => self.replica_paused.write().unwrap(),
+            ChainService::HEAD => self.head_paused.write().await,
+            ChainService::TAIL => self.tail_paused.write().await,
+            ChainService::REPLICA => self.replica_paused.write().await,
         };
 
         *paused_write = true;
         Ok(())
     }
 
-    pub fn resume(&mut self, service: ChainService) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn resume(&mut self, service: ChainService) -> Result<(), Box<dyn std::error::Error>> {
         #[cfg(debug_assertions)]
         println!("Resuming head service");
 
         let mut paused_write = match service {
-            ChainService::HEAD => self.head_paused.write().unwrap(),
-            ChainService::TAIL => self.tail_paused.write().unwrap(),
-            ChainService::REPLICA => self.replica_paused.write().unwrap(),
+            ChainService::HEAD => self.head_paused.write().await,
+            ChainService::TAIL => self.tail_paused.write().await,
+            ChainService::REPLICA => self.replica_paused.write().await,
         };
         
         *paused_write = false;
