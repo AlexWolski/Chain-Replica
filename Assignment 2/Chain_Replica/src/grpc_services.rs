@@ -63,15 +63,20 @@ impl HeadChainReplica for HeadChainReplicaService {
 
             //Get the logical clock
             let xid_read = self.shared_data.xid.read().await;
+            let curr_xid = *xid_read;
+            drop(xid_read);
 
-            //Compute the new value
+            //Get the current value
             let data_read = self.shared_data.database.read().await;
 
             let old_value = match data_read.get(&reqeust_ref.key) {
-                Some(value) => value,
-                None => &0,
+                Some(value) => *value,
+                None => 0,
             };
 
+            drop(data_read);
+
+            //Compute the new value
             let new_value = old_value + reqeust_ref.inc_value;
 
             //Construct the update request
@@ -79,7 +84,7 @@ impl HeadChainReplica for HeadChainReplicaService {
                 key: reqeust_ref.key.clone(),
                 new_value: new_value,
                 //Send the incremented logical clock, but don't modify it yet
-                xid: *xid_read + 1,
+                xid: curr_xid + 1,
             });
 
             //Connect to the local replica service
@@ -170,17 +175,49 @@ impl Replica for ReplicaService {
     Result<Response<UpdateResponse>, Status> {
         let new_tail_read = self.shared_data.new_tail.read().await;
 
-        //If the replica is a new tail, notify the predecesor to send a state transfer
         if *new_tail_read {
+            #[cfg(debug_assertions)]
+            println!("Received Update, requesting state transfer");
+
             let update_response = chain::UpdateResponse { rc: 1 };
             Ok(Response::new(update_response))
         }
-        //Otherwise, forward the update request
         else {
+            let request_ref = request.get_ref();
             #[cfg(debug_assertions)]
             println!("Received Update Request. Key: {}, newValue: {}, xID: {}",
-                request.get_ref().key, request.get_ref().new_value, request.get_ref().xid);
+                request_ref.key, request_ref.new_value, request_ref.xid);
 
+            //Get the logical clock
+            let xid_read = self.shared_data.xid.read().await;
+            let curr_xid = *xid_read;
+            drop(xid_read);
+
+            //Check if the update xid is outdated
+            if request_ref.xid <= curr_xid {
+                #[cfg(debug_assertions)]
+                println!("The update xID '{}' is older than the current xID '{}'. Aborting operation.", request_ref.xid, curr_xid);
+                return Err(Status::new(Code::InvalidArgument, "Old xID"));
+            }
+
+            //Check if the update xid is too new
+            if request_ref.xid > curr_xid + 1 {
+                #[cfg(debug_assertions)]
+                println!("The update xID '{}' is not next after the current xID '{}'. Aborting operation.", request_ref.xid, curr_xid);
+                return Err(Status::new(Code::InvalidArgument, "xID too large"));
+            }
+
+            //Update the value
+            let mut data_write = self.shared_data.database.write().await;
+            let _old_value = (*data_write).insert(request_ref.key.clone(), request_ref.new_value);
+            drop(data_write);
+
+            //Update the xid
+            let mut xid_write = self.shared_data.xid.write().await;
+            *xid_write = request_ref.xid;
+            drop(xid_write);
+
+            //Return an UpdateResponse
             let update_response = chain::UpdateResponse { rc: 0 };
             Ok(Response::new(update_response))
         }
