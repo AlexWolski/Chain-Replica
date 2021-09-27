@@ -311,6 +311,51 @@ impl ReplicaService {
             };
         }
     }
+
+    async fn send_ack(shared_data: Arc<ReplicaData>, request: Request<AckRequest>) {
+        let request_ref = request.get_ref();
+
+        loop {
+            //Read the ip address of the predecessor
+            let pred_addr_read = shared_data.pred_addr.read().await;
+
+            let pred_addr = match &(*pred_addr_read) {
+                Some(addr) => addr.clone(),
+                //Discard the ack if there is no predecessor
+                None => return,
+            };
+
+            drop(pred_addr_read);
+
+            //Connect to the predecessor replica service
+            let uri = format!("https://{}", pred_addr);
+            let connect_result = ReplicaClient::connect(uri).await;
+
+            match connect_result {
+                Ok(mut pred_client) => {
+                    //Attempt to send the AckRequest
+                    let update_result = pred_client.ack(request_ref.clone()).await;
+
+                    match update_result {
+                        //Ack was successful
+                        Ok(response) => return,
+                        //If the AckRequest failed, retry
+                        Err(_) => {
+                            #[cfg(debug_assertions)]
+                            println!("Failed to send an AckRequest to the predecessor at address: '{}'. Retrying...", pred_addr);
+                            sleep(Duration::from_millis(RETRY_WAIT)).await;
+                        },
+                    }
+                },
+                //If a connection could not be established, retry
+                Err(_) => {
+                    #[cfg(debug_assertions)]
+                    println!("Failed to connect to the predecessor at address: '{}'. Retrying...", pred_addr);
+                    sleep(Duration::from_millis(RETRY_WAIT)).await;
+                },
+            };
+        }
+    }
 }
 
 #[tonic::async_trait]
@@ -365,12 +410,26 @@ impl Replica for ReplicaService {
             (*sent_write).push(request_ref.clone());
             drop(sent_write);
 
-            //Forward the update
+            //Read the ip address of the successor
+            let succ_addr_read = self.shared_data.succ_addr.read().await;
+            let succ_addr = (*succ_addr_read).clone();
+            drop(succ_addr_read);
+
             let shared_data_clone = self.shared_data.clone();
 
-            tokio::spawn(async move {
-                ReplicaService::forward_update(shared_data_clone, request).await
-            });
+            match succ_addr {
+                //If there is a successor, forward the update
+                Some(addr) => {
+                    tokio::spawn(async move {
+                        ReplicaService::forward_update(shared_data_clone, request).await
+                    });
+                },
+                //If this replica is the tail, send an ack to the predecessor
+                None => {
+                    let ack_request = Request::<chain::AckRequest>::new(chain::AckRequest { xid: curr_xid });
+                    ReplicaService::send_ack(shared_data_clone, ack_request).await
+                },
+            };
 
             //Return an UpdateResponse
             let update_response = chain::UpdateResponse { rc: 0 };
