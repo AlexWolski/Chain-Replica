@@ -9,6 +9,7 @@ use std::net::SocketAddr;
 use async_std::sync::{Arc, RwLock};
 use tonic::{transport::Server, Request, Response, Status, Code};
 use tokio::time::{sleep, Duration};
+use futures::executor;
 use triggered::{Trigger, Listener};
 
 //Head
@@ -351,7 +352,7 @@ impl Replica for ReplicaService {
 
             //Update the value
             let mut data_write = self.shared_data.database.write().await;
-            let _old_value = (*data_write).insert(request_ref.key.clone(), request_ref.new_value as u32);
+            let _ = (*data_write).insert(request_ref.key.clone(), request_ref.new_value as u32);
             drop(data_write);
 
             //Update the xid
@@ -447,17 +448,17 @@ impl ServerManager {
         })
     }
     
-    pub async fn start(&mut self, socket: SocketAddr, head_paused: bool, tail_paused: bool, replica_paused: bool) ->
+    pub fn start(&mut self, socket: SocketAddr, head_paused: bool, tail_paused: bool, replica_paused: bool) ->
     Result<(), Box<dyn std::error::Error>> {
         //Set the paused status of all three services
         if head_paused {
-            self.pause(ChainService::HEAD).await?;
+            executor::block_on(self.pause(ChainService::HEAD));
         }
         if tail_paused {
-            self.pause(ChainService::TAIL).await?;
+            executor::block_on(self.pause(ChainService::TAIL));
         }
         if replica_paused {
-            self.pause(ChainService::REPLICA).await?;
+            executor::block_on(self.pause(ChainService::REPLICA));
         }
 
         //Create the service structs

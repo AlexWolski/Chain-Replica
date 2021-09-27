@@ -374,14 +374,14 @@ mod replica_manager {
             })
         }
 
-        pub async fn start(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        pub fn start(&mut self) -> Result<(), Box<dyn std::error::Error>> {
             let mut pause_head = true;
 
             if self.is_head()? {
                 pause_head = false;
             }
 
-            self.server.start(self.socket.clone(), false, false, pause_head).await?;
+            self.server.start(self.socket.clone(), false, false, pause_head);
 
             Ok(())
         }
@@ -415,7 +415,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("");
     let mut replica = replica_manager::Replica::new(&args[1], &args[2], server_port, name)?;
-    replica.start().await?;
+    replica.start();
     println!("");
 
     match signal::ctrl_c().await {
