@@ -9,6 +9,7 @@ use std::net::SocketAddr;
 use async_std::sync::{Arc, RwLock};
 use tonic::{transport::Server, Request, Response, Status, Code};
 use tokio::time::{sleep, Duration};
+use tokio::sync::broadcast;
 use futures::executor::block_on;
 use triggered::{Trigger, Listener};
 
@@ -32,13 +33,13 @@ pub struct ReplicaData {
     pub database: Arc<RwLock<HashMap<String, u32>>>,
     pub xid: Arc<RwLock<u32>>,
     pub sent: Arc<RwLock<Vec<UpdateRequest>>>,
-    pub ack: Arc<RwLock<Vec<u32>>>,
     pub my_addr: String,
     pub pred_addr: Arc<RwLock<Option<String>>>,
     pub succ_addr: Arc<RwLock<Option<String>>>,
     pub is_head: Arc<RwLock<bool>>,
     pub is_tail: Arc<RwLock<bool>>,
     pub new_tail: Arc<RwLock<bool>>,
+    pub ack_event: broadcast::Sender<u32>,
 }
 
 impl ReplicaData {
@@ -47,13 +48,13 @@ impl ReplicaData {
             database: Arc::new(RwLock::new(HashMap::<String, u32>::new())),
             xid: Arc::new(RwLock::new(0)),
             sent: Arc::new(RwLock::new(Vec::<UpdateRequest>::new())),
-            ack: Arc::new(RwLock::new(Vec::<u32>::new())),
             my_addr: server_addr,
             pred_addr: Arc::new(RwLock::new(Option::<String>::None)),
             succ_addr: Arc::new(RwLock::new(Option::<String>::None)),
             is_head: Arc::new(RwLock::new(false)),
             is_tail: Arc::new(RwLock::new(false)),
             new_tail: Arc::new(RwLock::new(true)),
+            ack_event: broadcast::channel(1).0,
         }
     }
 }
@@ -87,6 +88,7 @@ impl HeadChainReplica for HeadChainReplicaService {
             //Get the logical clock
             let xid_read = self.shared_data.xid.read().await;
             let curr_xid = *xid_read;
+            let new_xid = curr_xid + 1;
             drop(xid_read);
 
             //Get the current value
@@ -107,7 +109,7 @@ impl HeadChainReplica for HeadChainReplicaService {
                 key: reqeust_ref.key.clone(),
                 new_value: new_value,
                 //Send the incremented logical clock, but don't modify it yet
-                xid: curr_xid + 1,
+                xid: new_xid,
             });
 
             //Connect to the local replica service
@@ -125,19 +127,22 @@ impl HeadChainReplica for HeadChainReplicaService {
             };
 
             //Send the UpdateRequest
-            let update_response = replica_client.update(update_request).await;
+            //No need to check for errors since its the local replica service
+            tokio::spawn(async move {
+                let _ = replica_client.update(update_request).await;
+            });
 
-            match update_response {
-                Ok(_) => {},
-                //Ignore the IncRequest if UpdateRequest fails
-                Err(_) => {
-                    #[cfg(debug_assertions)]
-                    println!("Failed to send an UpdateRequest to the local replica service. Aborting operation.");
-                    return Err(Status::new(Code::Aborted, "UpdateRequest failed"))
-                },
+            //Keep listening for the ack with the correct xid
+            loop {
+                let mut ack_recv = self.shared_data.ack_event.subscribe();
+                let ack_xid = ack_recv.recv().await.unwrap();
+
+                if ack_xid == new_xid {
+                    break;
+                }
             }
 
-            //Return an IncResponse
+            //Return an IncResponse once the ack is received
             let head_response = chain::HeadResponse { rc: 0 };
             Ok(Response::new(head_response))
         }
@@ -333,43 +338,51 @@ impl ReplicaService {
         let request_ref = request.get_ref();
 
         loop {
-            //Discard the update if this is the head
+            //Check if this replica is the head
             let is_head_read = shared_data.is_head.read().await;
-            if *is_head_read { return };
+            let is_head = *is_head_read;
             drop(is_head_read);
 
-            //Read the ip address of the successor
-            let pred_addr_read = shared_data.pred_addr.read().await;
-            let pred_addr = (*pred_addr_read).as_ref().unwrap().clone();
-            drop(pred_addr_read);
+            //If this replica is the head, broadcast an ack event
+            if is_head {
+                shared_data.ack_event.send(request_ref.xid).unwrap();
+                return
+            }
+            //If there is a predecessor, forward the ack
+            else {
+                //Read the ip address of the successor
+                let pred_addr_read = shared_data.pred_addr.read().await;
+                let pred_addr = (*pred_addr_read).as_ref().unwrap().clone();
+                drop(pred_addr_read);
 
-            //Connect to the predecessor replica service
-            let uri = format!("https://{}", pred_addr);
-            let connect_result = ReplicaClient::connect(uri).await;
+                //Connect to the predecessor replica service
+                let uri = format!("https://{}", pred_addr);
+                let connect_result = ReplicaClient::connect(uri).await;
 
-            match connect_result {
-                Ok(mut pred_client) => {
-                    //Attempt to send the AckRequest
-                    let update_result = pred_client.ack(request_ref.clone()).await;
+                match connect_result {
+                    Ok(mut pred_client) => {
+                        //Attempt to send the AckRequest
+                        let update_result = pred_client.ack(request_ref.clone()).await;
 
-                    match update_result {
-                        //Ack was successful
-                        Ok(_) => return,
-                        //If the AckRequest failed, retry
-                        Err(_) => {
-                            #[cfg(debug_assertions)]
-                            println!("Failed to send an AckRequest to the predecessor at address: '{}'. Retrying...", pred_addr);
-                            sleep(Duration::from_millis(RETRY_WAIT)).await;
-                        },
-                    }
-                },
-                //If a connection could not be established, retry
-                Err(_) => {
-                    #[cfg(debug_assertions)]
-                    println!("Failed to connect to the predecessor at address: '{}'. Retrying...", pred_addr);
-                    sleep(Duration::from_millis(RETRY_WAIT)).await;
-                },
-            };
+                        match update_result {
+                            //Ack was successful
+                            Ok(_) => return,
+                            //If the AckRequest failed, retry
+                            Err(_) => {
+                                #[cfg(debug_assertions)]
+                                println!("Failed to send an AckRequest to the predecessor at address: '{}'. Retrying...", pred_addr);
+                                sleep(Duration::from_millis(RETRY_WAIT)).await;
+                            },
+                        }
+                    },
+                    //If a connection could not be established, retry
+                    Err(_) => {
+                        #[cfg(debug_assertions)]
+                        println!("Failed to connect to the predecessor at address: '{}'. Retrying...", pred_addr);
+                        sleep(Duration::from_millis(RETRY_WAIT)).await;
+                    },
+                };
+            }
         }
     }
 }
@@ -435,14 +448,17 @@ impl Replica for ReplicaService {
 
             //If this replica is the tail, send an ack to the predecessor
             if is_tail {
-                let ack_request = Request::<chain::AckRequest>::new(chain::AckRequest { xid: curr_xid });
-                ReplicaService::send_ack(shared_data_clone, ack_request).await
+                let ack_request = Request::<chain::AckRequest>::new(chain::AckRequest { xid: request_ref.xid });
+
+                tokio::spawn(async move {
+                    ReplicaService::send_ack(shared_data_clone, ack_request).await
+                });
             }
             //If there is a successor, forward the update
             else {
-                    tokio::spawn(async move {
-                        ReplicaService::forward_update(shared_data_clone, request).await
-                    });
+                tokio::spawn(async move {
+                    ReplicaService::forward_update(shared_data_clone, request).await
+                });
             }
 
             //Return an UpdateResponse
@@ -505,6 +521,13 @@ impl Replica for ReplicaService {
             (*sent_write).remove(index);
             drop(sent_write);
         }
+
+        let shared_data_clone = self.shared_data.clone();
+
+        //Forward the ack to the predecessor
+        tokio::spawn(async move {
+            ReplicaService::send_ack(shared_data_clone, request).await
+        });
 
         Ok(Response::new(chain::AckResponse {}))
     }
