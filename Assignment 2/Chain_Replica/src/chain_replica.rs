@@ -126,6 +126,28 @@ mod replica_manager {
             }
         }
 
+        //Attempts to automatically find the local ip address
+        //If the operation fails, prompt the user to choose an address
+        fn get_local_ip() -> Result<String, Box<dyn std::error::Error>> {
+            return match local_ip() {
+                //Successfully found the local ip address
+                Ok(ip) => {
+                    let ip_string = ip.to_string();
+
+                    //The local ip is invalid, prompt the user for a valid ip
+                    if ip_string.starts_with("169.254") {
+                        Replica::prompt_local_ip()
+                    }
+                    //If the local ip is valid
+                    else {
+                        Ok(ip_string)
+                    }
+                },
+                //If the local_ip method fails, prompt the user to choose an address
+                Err(_) => Replica::prompt_local_ip()
+            };
+        }
+
         //Returns the sequence number of a replica znode
         fn get_replica_id(znode: &str) -> Result<u32, Box<dyn std::error::Error>> {
             let mut znode_str = znode.to_string();
@@ -305,13 +327,8 @@ mod replica_manager {
 
         pub fn new(host_list: &str, base_path: &str, server_port: &str, name: &str)
         -> Result<Replica, Box<dyn std::error::Error>> {
-            //If no local IP address can be found, prompt the user to choose an IP address
-            let local_ip = match local_ip() {
-                Ok(ip) => ip.to_string(),
-                Err(_) => Replica::prompt_local_ip()?
-            };
-
             //Construct the server host and port
+            let local_ip = Replica::get_local_ip()?;
             let server_addr = format!("{}:{}", local_ip, server_port);
             let socket = server_addr.parse()?;
 
