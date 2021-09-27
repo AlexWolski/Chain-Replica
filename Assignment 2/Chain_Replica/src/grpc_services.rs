@@ -30,9 +30,9 @@ use chain::{AckRequest, AckResponse};
 static RETRY_WAIT: u64 = 1000;
 
 pub struct ReplicaData {
-    pub database: Arc<RwLock<HashMap<String, i32>>>,
+    pub database: Arc<RwLock<HashMap<String, u32>>>,
     pub xid: Arc<RwLock<u32>>,
-    pub sent: Arc<RwLock<Vec<Request<UpdateRequest>>>>,
+    pub sent: Arc<RwLock<Vec<UpdateRequest>>>,
     pub ack: Arc<RwLock<Vec<u32>>>,
     pub my_addr: String,
     pub pred_addr: Arc<RwLock<Option<String>>>,
@@ -81,7 +81,7 @@ impl HeadChainReplica for HeadChainReplicaService {
             drop(data_read);
 
             //Compute the new value
-            let new_value = old_value + reqeust_ref.inc_value;
+            let new_value = ((old_value as i32) + reqeust_ref.inc_value) as i32;
 
             //Construct the update request
             let update_request = Request::new(UpdateRequest {
@@ -159,7 +159,7 @@ impl TailChainReplica for TailChainReplicaService {
 
             let tail_response = chain::GetResponse {
                 rc: 0,
-                value: *value,
+                value: *value as i32,
             };
 
             Ok(Response::new(tail_response))
@@ -174,6 +174,78 @@ pub struct ReplicaService {
 }
 
 impl ReplicaService {
+    //Sent a state transfer to the successor server
+    async fn transfer_state(shared_data: Arc<ReplicaData>) {
+       loop {
+            //Read the ip address of the successor
+            let succ_addr_read = shared_data.succ_addr.read().await;
+
+            let succ_addr = match &(*succ_addr_read) {
+                Some(addr) => addr.clone(),
+                //Discard the update if there is no successor
+                None => return,
+            };
+
+            drop(succ_addr_read);
+
+            //Connect to the successor replica service
+            let uri = format!("https://{}", succ_addr);
+            let connect_result = ReplicaClient::connect(uri).await;
+
+            match connect_result {
+                Ok(mut succ_client) => {
+                    //Clone state data
+                    let database_read = shared_data.database.read().await;
+                    let state = (*database_read).clone();
+                    drop(database_read);
+                    let xid_read = shared_data.xid.read().await;
+                    let xid = (*xid_read).clone();
+                    drop(xid_read);
+                    let sent_read = shared_data.sent.read().await;
+                    let sent = (*sent_read).clone();
+                    drop(sent_read);
+
+                    //Construct the state transfer requset
+                    let transfer_request = Request::new(StateTransferRequest {
+                        state: state,
+                        xid: xid,
+                        sent: sent,
+                    });
+
+                    //Attempt to send the StateTransferRequest
+                    let transfer_result = succ_client.state_transfer(transfer_request).await;
+
+                    match transfer_result {
+                        Ok(response) => {
+                            match response.get_ref().rc {
+                                //State successfully transfered or  is no longer needed
+                                0 | 1 => return,
+                                //Invalid status code
+                                rc => {
+                                    #[cfg(debug_assertions)]
+                                    println!("Successor returned StateTransferResponse with invalid code: '{}'. Retrying...", rc);
+                                    sleep(Duration::from_millis(RETRY_WAIT)).await;
+                                }
+                            }
+                        },
+                        //If the request could not be sent, retry
+                        Err(_) => {
+                            #[cfg(debug_assertions)]
+                            println!("Failed to send a StateTransferResponse to the successor at address: '{}'. Retrying...", succ_addr);
+                            sleep(Duration::from_millis(RETRY_WAIT)).await;
+                        },
+                    }
+                },
+                //If a connection could not be established, retry
+                Err(_) => {
+                    #[cfg(debug_assertions)]
+                    println!("Failed to connect to the successor at address: '{}'. Retrying...", succ_addr);
+                    sleep(Duration::from_millis(RETRY_WAIT)).await;
+                },
+            };
+        }
+    }
+
     //Forward the update request to the successor server
     async fn forward_update(shared_data: Arc<ReplicaData>, request: Request<UpdateRequest>) {
         let request_ref = request.get_ref();
@@ -196,15 +268,8 @@ impl ReplicaService {
 
             match connect_result {
                 Ok(mut succ_client) => {
-                    //Copy the update requset
-                    let request_clone = Request::new(UpdateRequest {
-                        key: request_ref.key.clone(),
-                        new_value: request_ref.new_value.clone(),
-                        xid: request_ref.xid.clone(),
-                    });
-
                     //Attempt to send the UpdateRequest
-                    let update_result = succ_client.update(request_clone).await;
+                    let update_result = succ_client.update(request_ref.clone()).await;
 
                     match update_result {
                         Ok(response) => {
@@ -213,7 +278,12 @@ impl ReplicaService {
                                 0 => return,
                                 //State transfer requested. The successor has changed.
                                 1 => {
-                                    //To-do: Send a state transfer
+                                    //Sent the state transfer and stop trying to send the update
+                                    tokio::spawn(async move {
+                                        ReplicaService::transfer_state(shared_data).await
+                                    });
+
+                                    return;
                                 }
                                 //Invalid status code
                                 rc => {
@@ -281,7 +351,7 @@ impl Replica for ReplicaService {
 
             //Update the value
             let mut data_write = self.shared_data.database.write().await;
-            let _old_value = (*data_write).insert(request_ref.key.clone(), request_ref.new_value);
+            let _old_value = (*data_write).insert(request_ref.key.clone(), request_ref.new_value as u32);
             drop(data_write);
 
             //Update the xid
@@ -289,16 +359,9 @@ impl Replica for ReplicaService {
             *xid_write = request_ref.xid;
             drop(xid_write);
 
-            //Copy the update requset
-            let request_clone = Request::new(UpdateRequest {
-                key: request_ref.key.clone(),
-                new_value: request_ref.new_value.clone(),
-                xid: request_ref.xid.clone(),
-            });
-
             //Add the update to the sent list
             let mut sent_write = self.shared_data.sent.write().await;
-            (*sent_write).push(request_clone);
+            (*sent_write).push(request_ref.clone());
             drop(sent_write);
 
             //Forward the update
