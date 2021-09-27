@@ -7,23 +7,27 @@ pub mod chain {
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use async_std::sync::{Arc, RwLock};
-use tonic::{transport::Server, Request, Response, Status};
+use tonic::{transport::Server, Request, Response, Status, Code};
 use triggered::{Trigger, Listener};
 
 //Head
 use chain::head_chain_replica_server::{HeadChainReplica, HeadChainReplicaServer};
+use chain::head_chain_replica_client::HeadChainReplicaClient;
 use chain::{IncRequest, HeadResponse};
 //Tail
 use chain::tail_chain_replica_server::{TailChainReplica, TailChainReplicaServer};
+use chain::tail_chain_replica_client::TailChainReplicaClient;
 use chain::{GetRequest, GetResponse};
 //Replica
 use chain::replica_server::{Replica, ReplicaServer};
+use chain::replica_client::ReplicaClient;
 use chain::{UpdateRequest, UpdateResponse};
 use chain::{StateTransferRequest, StateTransferResponse};
 use chain::{AckRequest, AckResponse};
 
 pub struct ReplicaData {
     pub database: Arc<RwLock<HashMap<String, i32>>>,
+    pub xid: Arc<RwLock<u32>>,
     pub sent: Arc<RwLock<Vec<(String, i32, u32)>>>,
     pub ack: Arc<RwLock<Vec<u32>>>,
     pub my_addr: String,
@@ -43,15 +47,70 @@ impl HeadChainReplica for HeadChainReplicaService {
     Result<Response<HeadResponse>, Status> {
         let is_paused_read = self.is_paused.read().await;
 
+        //Ignore the request if the replica is not the head
         if *is_paused_read {
             #[cfg(debug_assertions)]
-            println!("Received Inc Request. Key: {}, Value: {}", request.get_ref().key, request.get_ref().inc_value);
+            println!("Received IncRequest, but this replica is not the head");
 
-            let head_response = chain::HeadResponse { rc: 0 };
+            let head_response = chain::HeadResponse { rc: 1 };
             Ok(Response::new(head_response))
         }
         else {
-            let head_response = chain::HeadResponse { rc: 1 };
+            let reqeust_ref = request.get_ref();
+
+            #[cfg(debug_assertions)]
+            println!("Received IncRequest. Key: {}, Value: {}", reqeust_ref.key, reqeust_ref.inc_value);
+
+            //Get the logical clock
+            let xid_read = self.shared_data.xid.read().await;
+
+            //Compute the new value
+            let data_read = self.shared_data.database.read().await;
+
+            let old_value = match data_read.get(&reqeust_ref.key) {
+                Some(value) => value,
+                None => &0,
+            };
+
+            let new_value = old_value + reqeust_ref.inc_value;
+
+            //Construct the update request
+            let update_request = Request::new(UpdateRequest {
+                key: reqeust_ref.key.clone(),
+                new_value: new_value,
+                //Send the incremented logical clock, but don't modify it yet
+                xid: *xid_read + 1,
+            });
+
+            //Connect to the local replica service
+            let uri = format!("https://{}", self.shared_data.my_addr);
+            let connect_result = ReplicaClient::connect(uri).await;
+
+            let mut replica_client = match connect_result {
+                Ok(client) => client,
+                //Ignore the IncRequest if a connection could not be established
+                Err(_) => {
+                    #[cfg(debug_assertions)]
+                    println!("Failed to connect to the local replica service. Aborting operation.");
+                    return Err(Status::new(Code::Aborted, "Replica service not responding"))
+                },
+            };
+
+            //Send the UpdateRequest
+            let update_response = replica_client.update(update_request).await;
+
+            match update_response {
+                Ok(_) => {},
+                //Ignore the IncRequest if UpdateRequest fails
+                Err(_) => {
+                    #[cfg(debug_assertions)]
+                    println!("Failed to send an UpdateRequest to the local replica service. Aborting operation.");
+                    return Err(Status::new(Code::Aborted, "UpdateRequest failed"))
+                },
+            }
+
+            //Return an IncResponse
+            let head_response = chain::HeadResponse { rc: 0 };
             Ok(Response::new(head_response))
         }
     }

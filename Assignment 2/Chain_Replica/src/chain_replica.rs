@@ -349,6 +349,7 @@ mod replica_manager {
             //Create the shared data for the servers
             let shared_data = Arc::new(ReplicaData{
                 database: Arc::new(RwLock::new(HashMap::<String, i32>::new())),
+                xid: Arc::new(RwLock::new(0)),
                 sent: Arc::new(RwLock::new(Vec::<(String, i32, u32)>::new())),
                 ack: Arc::new(RwLock::new(Vec::<u32>::new())),
                 my_addr: server_addr,
