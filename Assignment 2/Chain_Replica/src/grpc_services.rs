@@ -118,17 +118,7 @@ impl HeadChainReplica for HeadChainReplicaService {
 
             //Connect to the local replica service
             let uri = format!("https://{}", self.shared_data.my_addr);
-            let connect_result = ReplicaClient::connect(uri).await;
-
-            let mut replica_client = match connect_result {
-                Ok(client) => client,
-                //Ignore the IncRequest if a connection could not be established
-                Err(_) => {
-                    #[cfg(debug_assertions)]
-                    println!("Failed to connect to the local replica service. Aborting operation.");
-                    return Err(Status::new(Code::Aborted, "Replica service not responding"))
-                },
-            };
+            let mut replica_client = ReplicaClient::connect(uri).await.unwrap();
 
             //Send the UpdateRequest
             //No need to check for errors since its the local replica service
@@ -450,19 +440,18 @@ impl Replica for ReplicaService {
                 }
             }
 
-            //Update the value
+            //Update  database, sent, and xid
+            //Nest the locks to avoid conflict with state_transfer
             let mut data_write = self.shared_data.database.write().await;
-            let _ = (*data_write).insert(request_ref.key.clone(), request_ref.new_value as u32);
-            drop(data_write);
-
-            //Update the xid
-            let mut xid_write = self.shared_data.xid.write().await;
-            *xid_write = request_ref.xid;
-            drop(xid_write);
-
-            //Add the update to the sent list
             let mut sent_write = self.shared_data.sent.write().await;
+            let mut xid_write = self.shared_data.xid.write().await;
+
             (*sent_write).push(request_ref.clone());
+            let _ = (*data_write).insert(request_ref.key.clone(), request_ref.new_value as u32);
+            *xid_write = request_ref.xid;
+
+            drop(data_write);
+            drop(xid_write);
             drop(sent_write);
 
             //Check if this replica is the tail
@@ -500,28 +489,68 @@ impl Replica for ReplicaService {
 
     async fn state_transfer(&self, request: Request<StateTransferRequest>) ->
     Result<Response<StateTransferResponse>, Status> {
-        let new_tail_read = self.shared_data.new_tail.read().await;
+        let request_ref = request.get_ref();
 
-        //If this replica is a new node, copy all values
-        if *new_tail_read {
-            #[cfg(debug_assertions)]
-            println!("Received StateTransferRequest ( xID: {} )", request.get_ref().xid);
+        #[cfg(debug_assertions)]
+        println!("Received StateTransferRequest ( xID: {} )", request_ref.xid);
 
-            let transfer_response = chain::StateTransferResponse { rc: 0 };
+        let mut new_tail_read = self.shared_data.new_tail.read().await;
+        let new_tail = *new_tail_read;
+        drop(new_tail_read);
 
-            //Release the read lock
-            drop(new_tail_read);
-            //Aquire a write lock and set new_tail to false
+        let mut data_write = self.shared_data.database.write().await;
+        let mut xid_write = self.shared_data.xid.write().await;
+
+        //If this is an empty replica, copy all of the data
+        if new_tail {
+            //Copy all of the replica data
+            //Since this is a tail replica, don't copy the sent list
+            //To-Do: Only send and copy the needed portions
+            *data_write = request_ref.state.clone();
+            *xid_write = request_ref.xid;
+
+            //Set new_tail to false
             let mut new_tail_write = self.shared_data.new_tail.write().await;
             *new_tail_write = false;
-
-            Ok(Response::new(transfer_response))
+            drop(new_tail_write);
         }
-        //Otherwise, notify the predecessor that this replica isn't a new tail
+        //If this is not an empty replica, apply the new updates
         else {
-            let transfer_response = chain::StateTransferResponse { rc: 1 };
-            Ok(Response::new(transfer_response))
+            let curr_xid = *xid_write;
+            let uri = format!("https://{}", self.shared_data.my_addr);
+            let sent_list = request_ref.sent.to_owned();
+
+            for update_request in sent_list {
+                if update_request.xid > curr_xid {
+                    let mut replica_client = ReplicaClient::connect(uri.clone()).await.unwrap();
+
+                    //The update threads won't complete until the locks are released
+                    tokio::spawn(async move {
+                        let _ = replica_client.update(update_request).await;
+                    });
+                } 
+            }
+
+            //If the predecessor is missing any ACKs, forward them
+            let mut missing_xid = request_ref.xid;
+
+            while missing_xid < *xid_write {
+                let shared_data_clone = self.shared_data.clone();
+                let ack_request = Request::<chain::AckRequest>::new(chain::AckRequest { xid: missing_xid });
+
+                tokio::spawn(async move {
+                    ReplicaService::send_ack(shared_data_clone, ack_request).await
+                });
+
+                missing_xid += 1;
+            }
         }
+
+        drop(xid_write);
+        drop(data_write);
+
+        let transfer_response = chain::StateTransferResponse { rc: 0 };
+        Ok(Response::new(transfer_response))
     }
 
     async fn ack(&self, request: Request<AckRequest>) ->
@@ -562,11 +591,13 @@ impl Replica for ReplicaService {
 
         drop(sent_read);
 
+        //Lock sent and last_ack to prevent conflicts
+        let mut sent_write = self.shared_data.sent.write().await;
+        let mut last_ack_write = self.shared_data.last_ack.write().await;
+
         //If the update was in the sent list, remove it
         if index < len {
-            let mut sent_write = self.shared_data.sent.write().await;
             (*sent_write).remove(index);
-            drop(sent_write);
         }
 
         let shared_data_clone = self.shared_data.clone();
@@ -577,9 +608,10 @@ impl Replica for ReplicaService {
         });
 
         //Update the last ack processed
-        let mut last_ack_write = self.shared_data.last_ack.write().await;
         *last_ack_write = ack_xid;
+
         drop(last_ack_write);
+        drop(sent_write);
 
         Ok(Response::new(chain::AckResponse {}))
     }
