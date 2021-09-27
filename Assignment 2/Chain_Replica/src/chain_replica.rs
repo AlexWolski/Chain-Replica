@@ -411,8 +411,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err(Error::new(ErrorKind::InvalidInput, "Invalid number of arguments").into());
     }
 
+    println!("");
     let mut replica = replica_manager::Replica::new(&args[1], &args[2], server_port, name)?;
     replica.start().await?;
+    println!("");
 
     match signal::ctrl_c().await {
         Ok(()) => {

@@ -130,17 +130,29 @@ impl TailChainReplica for TailChainReplicaService {
 
         if *is_paused_read {
             #[cfg(debug_assertions)]
-            println!("Received Get Request. Key: {}", request.get_ref().key);
+            println!("Received GetRequest, but this replica is not the tail");
 
-            let tail_response = chain::GetResponse {
-                rc: 0,
-                value: 0,
-            };
-
+            let tail_response = chain::GetResponse { rc: 1, value : 0 };
             Ok(Response::new(tail_response))
         }
         else {
-            let tail_response = chain::GetResponse { rc: 1, value : 0 };
+            let key = &request.get_ref().key;
+
+            #[cfg(debug_assertions)]
+            println!("Received Get Request. Key: {}", key);
+
+            let data_read = self.shared_data.database.read().await;
+
+            let value = match data_read.get(key) {
+                Some(value) => value,
+                None => &0,
+            };
+
+            let tail_response = chain::GetResponse {
+                rc: 0,
+                value: *value,
+            };
+
             Ok(Response::new(tail_response))
         }
     }
