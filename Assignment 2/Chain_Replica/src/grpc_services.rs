@@ -65,7 +65,7 @@ impl HeadChainReplica for HeadChainReplicaService {
             let reqeust_ref = request.get_ref();
 
             #[cfg(debug_assertions)]
-            println!("Received IncRequest. Key: {}, Value: {}", reqeust_ref.key, reqeust_ref.inc_value);
+            println!("Received IncRequest ( Key: '{}', Value: {} )", reqeust_ref.key, reqeust_ref.inc_value);
 
             //Get the logical clock
             let xid_read = self.shared_data.xid.read().await;
@@ -152,7 +152,7 @@ impl TailChainReplica for TailChainReplicaService {
             let key = &request.get_ref().key;
 
             #[cfg(debug_assertions)]
-            println!("Received Get Request. Key: {}", key);
+            println!("Received GetRequest ( Key: '{}' )", key);
 
             let data_read = self.shared_data.database.read().await;
 
@@ -373,7 +373,7 @@ impl Replica for ReplicaService {
         else {
             let request_ref = request.get_ref();
             #[cfg(debug_assertions)]
-            println!("Received Update Request. Key: {}, newValue: {}, xID: {}",
+            println!("Received UpdateRequest ( Key: '{}', newValue: {}, xID: {} )",
                 request_ref.key, request_ref.new_value, request_ref.xid);
 
             //Get the logical clock
@@ -441,7 +441,7 @@ impl Replica for ReplicaService {
         //If this replica is a new node, accept the state transfer
         if *new_tail_read {
             #[cfg(debug_assertions)]
-            println!("Received State Transfer Request. xID: {}", request.get_ref().xid);
+            println!("Received StateTransferRequest ( xID: {} )", request.get_ref().xid);
 
             let transfer_response = chain::StateTransferResponse { rc: 0 };
 
@@ -463,11 +463,33 @@ impl Replica for ReplicaService {
     async fn ack(&self, request: Request<AckRequest>) ->
     Result<Response<AckResponse>, Status> {
         #[cfg(debug_assertions)]
-        println!("Received State Transfer Request. xID: {}", request.get_ref().xid);
+        let xid = request.get_ref().xid;
+        println!("Received AckRequest ( xID: {} )", xid);
 
-        let ack_response = chain::AckResponse {};
+        let sent_read = self.shared_data.sent.read().await;
+        let sent: &Vec<UpdateRequest> = (*sent_read).as_ref();
+        let len = sent.len();
+        let mut index = 0;
 
-        Ok(Response::new(ack_response))
+        //Find the update correspoinding to the xid
+        for update in sent {
+            if update.xid == xid {
+                break;
+            }
+
+            index += 1;
+        }
+
+        drop(sent_read);
+
+        //If the update was in the sent list, remove it
+        if index < len {
+            let mut sent_write = self.shared_data.sent.write().await;
+            (*sent_write).remove(index);
+            drop(sent_write);
+        }
+
+        Ok(Response::new(chain::AckResponse {}))
     }
 }
 
