@@ -362,10 +362,10 @@ mod replica_manager {
         }
 
         pub fn start(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-            let is_head = self.is_head()?;
-            //If this is the first replica in the chain, activate
-            //the head service and don't request a state transfer
-            self.server.start(self.socket.clone(), is_head, true);
+            let pred_addr = self.get_pred()?;
+            let succ_addr = self.get_succ()?;
+
+            self.server.start(self.socket.clone(), pred_addr, succ_addr);
             Ok(())
         }
 

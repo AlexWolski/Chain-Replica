@@ -639,9 +639,9 @@ impl ServerManager {
         }
     }
     
-    pub fn start(&mut self, socket: SocketAddr, is_head: bool, is_tail: bool) {
-        self.set_head(is_head);
-        self.set_tail(is_tail);
+    pub fn start(&mut self, socket: SocketAddr, pred_addr: Option<String>, succ_addr: Option<String>) {
+        self.set_pred(pred_addr);
+        self.set_succ(succ_addr);
 
         //Create the service structs
         let head_service = HeadChainReplicaService { shared_data: self.shared_data.clone() };
