@@ -384,17 +384,25 @@ mod replica_manager {
             let succ_znode = self.get_succ()?;
 
             let pred_addr = match pred_znode {
-                Some(znode) => match self.get_node_address(&znode) {
-                    Ok(addr) => Some(addr),
-                    Err(err) => return Err(err)
+                Some(znode) => {
+                    let znode_full = format!("{}/{}", self.base_path, znode);
+
+                    match self.get_node_address(&znode_full) {
+                        Ok(addr) => Some(addr),
+                        Err(err) => return Err(err)
+                    }
                 },
                 None => None,
             };
 
             let succ_addr = match succ_znode {
-                Some(znode) => match self.get_node_address(&znode) {
-                    Ok(addr) => Some(addr),
-                    Err(err) => return Err(err)
+                Some(znode) => {
+                    let znode_full = format!("{}/{}", self.base_path, znode);
+
+                    match self.get_node_address(&znode_full) {
+                        Ok(addr) => Some(addr),
+                        Err(err) => return Err(err)
+                    }
                 },
                 None => None,
             };
