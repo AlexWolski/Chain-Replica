@@ -189,7 +189,7 @@ mod replica_manager {
                     format!("znode data '{}' is formatted incorrectly", znode_data)).into())
             }
 
-            let delim_pos = result.unwrap() - 1;
+            let delim_pos = result.unwrap();
             //Split the address into znode_data_str 
             let _ = znode_data_str.split_off(delim_pos);
 
