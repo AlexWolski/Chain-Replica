@@ -200,17 +200,22 @@ pub struct ReplicaService {
 
 impl ReplicaService {
     //Sent a state transfer to the successor server
-    async fn transfer_state(shared_data: Arc<ReplicaData>) {
+    async fn transfer_state(shared_data: Arc<ReplicaData>, succ_addr: String) {
         loop {
-            //Discard the update if this is the tail
+            //Abort the state transfer if this is the tail
             let is_tail_read = shared_data.is_tail.read().await;
-            if *is_tail_read { return };
+            if *is_tail_read { return }
             drop(is_tail_read);
 
-            //Read the ip address of the successor
-            let succ_addr_read = shared_data.succ_addr.read().await;
-            let succ_addr = (*succ_addr_read).as_ref().unwrap().clone();
-            drop(succ_addr_read);
+            //Read the ip address of the current successor
+            let curr_succ_addr_read = shared_data.succ_addr.read().await;
+            let curr_succ_addr = (*curr_succ_addr_read).as_ref().unwrap().clone();
+            drop(curr_succ_addr_read);
+
+            //If the successor has changed, abort the transfer
+            if curr_succ_addr != succ_addr {
+                return
+            }
 
             //Connect to the successor replica service
             let uri = format!("https://{}", succ_addr);
@@ -271,7 +276,7 @@ impl ReplicaService {
     }
 
     //Forward the update request to the successor server
-    async fn forward_update(shared_data: Arc<ReplicaData>, request: Request<UpdateRequest>) {
+    async fn forward_update(shared_data: Arc<ReplicaData>, request: Request<UpdateRequest>, succ_addr: String) {
         let request_ref = request.get_ref();
 
         loop {
@@ -280,10 +285,15 @@ impl ReplicaService {
             if *is_tail_read { return };
             drop(is_tail_read);
 
-            //Read the ip address of the successor
-            let succ_addr_read = shared_data.succ_addr.read().await;
-            let succ_addr = (*succ_addr_read).as_ref().unwrap().clone();
-            drop(succ_addr_read);
+            //Read the ip address of the current successor
+            let curr_succ_addr_read = shared_data.succ_addr.read().await;
+            let curr_succ_addr = (*curr_succ_addr_read).as_ref().unwrap().clone();
+            drop(curr_succ_addr_read);
+
+            //If the successor has changed, discard the update
+            if curr_succ_addr != succ_addr {
+                return
+            }
 
             //Connect to the successor replica service
             let uri = format!("https://{}", succ_addr);
@@ -303,7 +313,7 @@ impl ReplicaService {
                                 1 => {
                                     //Sent the state transfer and stop trying to send the update
                                     tokio::spawn(async move {
-                                        ReplicaService::transfer_state(shared_data).await
+                                        ReplicaService::transfer_state(shared_data, succ_addr).await
                                     });
 
                                     return;
@@ -456,8 +466,13 @@ impl Replica for ReplicaService {
             }
             //If there is a successor, forward the update
             else {
+                //Read the ip address of the successor
+                let succ_addr_read = self.shared_data.succ_addr.read().await;
+                let succ_addr = (*succ_addr_read).as_ref().unwrap().clone();
+                drop(succ_addr_read);
+
                 tokio::spawn(async move {
-                    ReplicaService::forward_update(shared_data_clone, request).await
+                    ReplicaService::forward_update(shared_data_clone, request, succ_addr).await
                 });
             }
 
