@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use async_std::sync::{Arc, RwLock};
 use tonic::{transport::Server, Request, Response, Status, Code};
+use tokio::time::{sleep, Duration};
 use triggered::{Trigger, Listener};
 
 //Head
@@ -25,10 +26,13 @@ use chain::{UpdateRequest, UpdateResponse};
 use chain::{StateTransferRequest, StateTransferResponse};
 use chain::{AckRequest, AckResponse};
 
+//The number of milliseconds to wait before retrying a connection
+static RETRY_WAIT: u64 = 1000;
+
 pub struct ReplicaData {
     pub database: Arc<RwLock<HashMap<String, i32>>>,
     pub xid: Arc<RwLock<u32>>,
-    pub sent: Arc<RwLock<Vec<(String, i32, u32)>>>,
+    pub sent: Arc<RwLock<Vec<Request<UpdateRequest>>>>,
     pub ack: Arc<RwLock<Vec<u32>>>,
     pub my_addr: String,
     pub pred_addr: Arc<RwLock<Option<String>>>,
@@ -169,6 +173,75 @@ pub struct ReplicaService {
     is_paused: Arc<RwLock<bool>>,
 }
 
+impl ReplicaService {
+    //Forward the update request to the successor server
+    async fn forward_update(shared_data: Arc<ReplicaData>, request: Request<UpdateRequest>) {
+        let request_ref = request.get_ref();
+
+        loop {
+            //Read the ip address of the successor
+            let succ_addr_read = shared_data.succ_addr.read().await;
+
+            let succ_addr = match &(*succ_addr_read) {
+                Some(addr) => addr.clone(),
+                //Discard the update if there is no successor
+                None => return,
+            };
+
+            drop(succ_addr_read);
+
+            //Connect to the successor replica service
+            let uri = format!("https://{}", succ_addr);
+            let connect_result = ReplicaClient::connect(uri).await;
+
+            match connect_result {
+                Ok(mut succ_client) => {
+                    //Copy the update requset
+                    let request_clone = Request::new(UpdateRequest {
+                        key: request_ref.key.clone(),
+                        new_value: request_ref.new_value.clone(),
+                        xid: request_ref.xid.clone(),
+                    });
+
+                    //Attempt to send the UpdateRequest
+                    let update_result = succ_client.update(request_clone).await;
+
+                    match update_result {
+                        Ok(response) => {
+                            match response.get_ref().rc {
+                                //Update successfully reached the successor
+                                0 => return,
+                                //State transfer requested. The successor has changed.
+                                1 => {
+                                    //To-do: Send a state transfer
+                                }
+                                //Invalid status code
+                                rc => {
+                                    #[cfg(debug_assertions)]
+                                    println!("Successor returned UpdateResponse with invalid code: '{}'. Retrying...", rc);
+                                    sleep(Duration::from_millis(RETRY_WAIT)).await;
+                                }
+                            }
+                        },
+                        //If the request could not be sent, retry
+                        Err(_) => {
+                            #[cfg(debug_assertions)]
+                            println!("Failed to send an UpdateRequest to the successor at address: '{}'. Retrying...", succ_addr);
+                            sleep(Duration::from_millis(RETRY_WAIT)).await;
+                        },
+                    }
+                },
+                //If a connection could not be established, retry
+                Err(_) => {
+                    #[cfg(debug_assertions)]
+                    println!("Failed to connect to the successor at address: '{}'. Retrying...", succ_addr);
+                    sleep(Duration::from_millis(RETRY_WAIT)).await;
+                },
+            };
+        }
+    }
+}
+
 #[tonic::async_trait]
 impl Replica for ReplicaService {
     async fn update(&self, request: Request<UpdateRequest>) ->
@@ -200,11 +273,10 @@ impl Replica for ReplicaService {
                 return Err(Status::new(Code::InvalidArgument, "Old xID"));
             }
 
-            //Check if the update xid is too new
+            //If the update xid is too new, request a state transfer
             if request_ref.xid > curr_xid + 1 {
-                #[cfg(debug_assertions)]
-                println!("The update xID '{}' is not next after the current xID '{}'. Aborting operation.", request_ref.xid, curr_xid);
-                return Err(Status::new(Code::InvalidArgument, "xID too large"));
+                let update_response = chain::UpdateResponse { rc: 1 };
+                return Ok(Response::new(update_response))
             }
 
             //Update the value
@@ -216,6 +288,25 @@ impl Replica for ReplicaService {
             let mut xid_write = self.shared_data.xid.write().await;
             *xid_write = request_ref.xid;
             drop(xid_write);
+
+            //Copy the update requset
+            let request_clone = Request::new(UpdateRequest {
+                key: request_ref.key.clone(),
+                new_value: request_ref.new_value.clone(),
+                xid: request_ref.xid.clone(),
+            });
+
+            //Add the update to the sent list
+            let mut sent_write = self.shared_data.sent.write().await;
+            (*sent_write).push(request_clone);
+            drop(sent_write);
+
+            //Forward the update
+            let shared_data_clone = self.shared_data.clone();
+
+            tokio::spawn(async move {
+                ReplicaService::forward_update(shared_data_clone, request).await
+            });
 
             //Return an UpdateResponse
             let update_response = chain::UpdateResponse { rc: 0 };

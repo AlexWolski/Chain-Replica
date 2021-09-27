@@ -18,9 +18,11 @@ mod replica_manager {
     use std::collections::HashMap;
     use std::net::{SocketAddr};
     use async_std::sync::{Arc, RwLock};
+    use tonic::{Request};
     use local_ip_address::{local_ip, list_afinet_netifas};
     use zookeeper::{CreateMode, ZooKeeper, ZkState};
     use grpc_services::{ReplicaData, ServerManager};
+    use grpc_services::chain::{UpdateRequest};
 
     //The delimiting character separating the address and name in the znode data
     static ZNODE_DELIM: &str = "\n";
@@ -350,7 +352,7 @@ mod replica_manager {
             let shared_data = Arc::new(ReplicaData{
                 database: Arc::new(RwLock::new(HashMap::<String, i32>::new())),
                 xid: Arc::new(RwLock::new(0)),
-                sent: Arc::new(RwLock::new(Vec::<(String, i32, u32)>::new())),
+                sent: Arc::new(RwLock::new(Vec::<Request<UpdateRequest>>::new())),
                 ack: Arc::new(RwLock::new(Vec::<u32>::new())),
                 my_addr: server_addr,
                 pred_addr: Arc::new(RwLock::new(Option::<String>::None)),
