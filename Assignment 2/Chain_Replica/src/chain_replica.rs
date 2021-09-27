@@ -380,8 +380,24 @@ mod replica_manager {
 
         //Check for changes in ZooKeeper
         pub fn update(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-            let pred_addr = self.get_pred()?;
-            let succ_addr = self.get_succ()?;
+            let pred_znode = self.get_pred()?;
+            let succ_znode = self.get_succ()?;
+
+            let pred_addr = match pred_znode {
+                Some(znode) => match self.get_node_address(&znode) {
+                    Ok(addr) => Some(addr),
+                    Err(err) => return Err(err)
+                },
+                None => None,
+            };
+
+            let succ_addr = match succ_znode {
+                Some(znode) => match self.get_node_address(&znode) {
+                    Ok(addr) => Some(addr),
+                    Err(err) => return Err(err)
+                },
+                None => None,
+            };
             
             self.server.set_pred(pred_addr);
             self.server.set_succ(succ_addr);
