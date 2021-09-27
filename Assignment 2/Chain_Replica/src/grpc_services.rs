@@ -29,7 +29,7 @@ use chain::{AckRequest, AckResponse};
 //The number of milliseconds to wait before retrying a connection
 static RETRY_WAIT: u64 = 1000;
 //The number of milliseconds to wait for ACKs to complete
-static ACK_WAIT: u64 = 100;
+static VAR_WAIT: u64 = 100;
 
 pub struct ReplicaData {
     pub database: Arc<RwLock<HashMap<String, u32>>>,
@@ -434,10 +434,20 @@ impl Replica for ReplicaService {
                 return Err(Status::new(Code::InvalidArgument, "Old xID"));
             }
 
-            //If the update xid is too new, request a state transfer
-            if request_ref.xid > curr_xid + 1 {
-                let update_response = chain::UpdateResponse { rc: 1 };
-                return Ok(Response::new(update_response))
+            //Ensure that the updates are processed in sequential order
+            loop {
+                //Get the updated xid
+                let xid_read = self.shared_data.xid.read().await;
+                let new_xid = *xid_read;
+                drop(xid_read);
+
+                //If the update is too new, wait for all previous updates to complete
+                if new_xid > curr_xid + 1 {
+                    sleep(Duration::from_millis(VAR_WAIT)).await;
+                }
+                else {
+                    break;
+                }
             }
 
             //Update the value
@@ -529,7 +539,10 @@ impl Replica for ReplicaService {
 
             //If the ack is too new, wait for all previous acks to complete
             if ack_xid > last_ack + 1 {
-                sleep(Duration::from_millis(ACK_WAIT)).await;
+                sleep(Duration::from_millis(VAR_WAIT)).await;
+            }
+            else {
+                break;
             }
         }
 
