@@ -28,10 +28,13 @@ use chain::{AckRequest, AckResponse};
 
 //The number of milliseconds to wait before retrying a connection
 static RETRY_WAIT: u64 = 1000;
+//The number of milliseconds to wait for ACKs to complete
+static ACK_WAIT: u64 = 100;
 
 pub struct ReplicaData {
     pub database: Arc<RwLock<HashMap<String, u32>>>,
     pub xid: Arc<RwLock<u32>>,
+    pub last_ack: Arc<RwLock<u32>>,
     pub sent: Arc<RwLock<Vec<UpdateRequest>>>,
     pub my_addr: String,
     pub pred_addr: Arc<RwLock<Option<String>>>,
@@ -47,6 +50,7 @@ impl ReplicaData {
         ReplicaData{
             database: Arc::new(RwLock::new(HashMap::<String, u32>::new())),
             xid: Arc::new(RwLock::new(0)),
+            last_ack: Arc::new(RwLock::new(0)),
             sent: Arc::new(RwLock::new(Vec::<UpdateRequest>::new())),
             my_addr: server_addr,
             pred_addr: Arc::new(RwLock::new(Option::<String>::None)),
@@ -200,7 +204,7 @@ pub struct ReplicaService {
 
 impl ReplicaService {
     //Sent a state transfer to the successor server
-    async fn transfer_state(shared_data: Arc<ReplicaData>, succ_addr: String) {
+    async fn send_state_transfer(shared_data: Arc<ReplicaData>, succ_addr: String) {
         loop {
             //Abort the state transfer if this is the tail
             let is_tail_read = shared_data.is_tail.read().await;
@@ -313,7 +317,7 @@ impl ReplicaService {
                                 1 => {
                                     //Sent the state transfer and stop trying to send the update
                                     tokio::spawn(async move {
-                                        ReplicaService::transfer_state(shared_data, succ_addr).await
+                                        ReplicaService::send_state_transfer(shared_data, succ_addr).await
                                     });
 
                                     return;
@@ -344,6 +348,8 @@ impl ReplicaService {
         }
     }
 
+    //Continuously try to send an ACK to the predecessor
+    //If the predecessor changes, the ACKs will be sent to the new predecessor
     async fn send_ack(shared_data: Arc<ReplicaData>, request: Request<AckRequest>) {
         let request_ref = request.get_ref();
 
@@ -486,7 +492,7 @@ impl Replica for ReplicaService {
     Result<Response<StateTransferResponse>, Status> {
         let new_tail_read = self.shared_data.new_tail.read().await;
 
-        //If this replica is a new node, accept the state transfer
+        //If this replica is a new node, copy all values
         if *new_tail_read {
             #[cfg(debug_assertions)]
             println!("Received StateTransferRequest ( xID: {} )", request.get_ref().xid);
@@ -511,8 +517,21 @@ impl Replica for ReplicaService {
     async fn ack(&self, request: Request<AckRequest>) ->
     Result<Response<AckResponse>, Status> {
         #[cfg(debug_assertions)]
-        let xid = request.get_ref().xid;
-        println!("Received AckRequest ( xID: {} )", xid);
+        let ack_xid = request.get_ref().xid;
+        println!("Received AckRequest ( xID: {} )", ack_xid);
+
+        //Ensure that ACKs are processed in sequential order
+        loop {
+            //Get the last ack received
+            let last_ack_read = self.shared_data.last_ack.read().await;
+            let last_ack = *last_ack_read;
+            drop(last_ack_read);
+
+            //If the ack is too new, wait for all previous acks to complete
+            if ack_xid > last_ack + 1 {
+                sleep(Duration::from_millis(ACK_WAIT)).await;
+            }
+        }
 
         let sent_read = self.shared_data.sent.read().await;
         let sent: &Vec<UpdateRequest> = (*sent_read).as_ref();
@@ -521,7 +540,7 @@ impl Replica for ReplicaService {
 
         //Find the update correspoinding to the xid
         for update in sent {
-            if update.xid == xid {
+            if update.xid == ack_xid {
                 break;
             }
 
@@ -543,6 +562,11 @@ impl Replica for ReplicaService {
         tokio::spawn(async move {
             ReplicaService::send_ack(shared_data_clone, request).await
         });
+
+        //Update the last ack processed
+        let mut last_ack_write = self.shared_data.last_ack.write().await;
+        *last_ack_write = ack_xid;
+        drop(last_ack_write);
 
         Ok(Response::new(chain::AckResponse {}))
     }
