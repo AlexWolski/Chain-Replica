@@ -8,8 +8,7 @@
  * https://github.com/anshulrgoyal/rust-grpc-demo
 !*/
 
-
-mod grpc_manager;
+mod grpc_services;
 mod zk_manager;
 
 mod replica_manager {
@@ -21,7 +20,7 @@ mod replica_manager {
     use std::net::{SocketAddr};
     use local_ip_address::{local_ip, list_afinet_netifas};
     use zookeeper::{CreateMode, ZooKeeper, ZkState};
-    use grpc_manager::{ReplicaData, GRpcServer, HeadServerManager, TailServerManager, ReplicaServerManager};
+    use grpc_services::{ReplicaData, ServerManager};
 
     //The delimiting character separating the address and name in the znode data
     static ZNODE_DELIM: &str = "\n";
@@ -37,9 +36,7 @@ mod replica_manager {
         base_path: String,
         replica_id: u32,
         shared_data: Arc<ReplicaData>,
-        head_server: HeadServerManager,
-        tail_server: TailServerManager,
-        replica_server: ReplicaServerManager,
+        server: ServerManager,
     }
 
     impl Replica {
@@ -344,7 +341,7 @@ mod replica_manager {
                 new_tail: Arc::new(RwLock::new(false)),
             });
 
-            Ok(Replica{
+            Ok(Replica {
                 //ZooKeeper data
                 zk_instance: instance,
                 socket: socket,
@@ -353,9 +350,7 @@ mod replica_manager {
                 //Data shared by all services
                 shared_data: shared_data.clone(),
                 //Instantiate Servers
-                head_server: HeadServerManager::new(shared_data.clone())?,
-                tail_server: TailServerManager::new(shared_data.clone())?,
-                replica_server: ReplicaServerManager::new(shared_data.clone())?,
+                server: ServerManager::new(shared_data.clone())?,
             })
         }
 
@@ -366,21 +361,13 @@ mod replica_manager {
                 pause_head = false;
             }
 
-            //The replica service should always be active
-            //Since replicas are added to the end of the chian, the rail service should be active
-            //The head service should only be active when there are no other replicas
-            self.replica_server.start(self.socket.clone(), false)?;
-            self.tail_server.start(self.socket.clone(), false)?;
-            self.head_server.start(self.socket.clone(), pause_head)?;
+            self.server.start(self.socket.clone(), false, false, pause_head)?;
 
             Ok(())
         }
 
         pub fn stop(self) -> Result<(), Box<dyn std::error::Error>> {
-            self.replica_server.stop();
-            self.tail_server.stop();
-            self.head_server.stop();
-
+            self.server.stop();
             Ok(())
         }
     }
