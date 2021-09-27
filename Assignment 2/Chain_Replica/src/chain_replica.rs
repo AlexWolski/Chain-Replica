@@ -365,7 +365,7 @@ mod replica_manager {
             let is_head = self.is_head()?;
             //If this is the first replica in the chain, activate
             //the head service and don't request a state transfer
-            self.server.start(self.socket.clone(), is_head, true, !is_head);
+            self.server.start(self.socket.clone(), is_head, true);
             Ok(())
         }
 

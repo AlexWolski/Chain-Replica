@@ -57,6 +57,8 @@ impl ReplicaData {
             succ_addr: Arc::new(RwLock::new(Option::<String>::None)),
             is_head: Arc::new(RwLock::new(false)),
             is_tail: Arc::new(RwLock::new(false)),
+            //new_tail is true by default since replicas are added to the end of chains
+            //If the replica is both the head and the tail, then new_tail is set to false
             new_tail: Arc::new(RwLock::new(true)),
             ack_event: broadcast::channel(1).0,
         }
@@ -637,10 +639,9 @@ impl ServerManager {
         }
     }
     
-    pub fn start(&mut self, socket: SocketAddr, is_head: bool, is_tail: bool, new_tail: bool) {
+    pub fn start(&mut self, socket: SocketAddr, is_head: bool, is_tail: bool) {
         self.set_head(is_head);
         self.set_tail(is_tail);
-        self.set_new_tail(new_tail);
 
         //Create the service structs
         let head_service = HeadChainReplicaService { shared_data: self.shared_data.clone() };
@@ -665,30 +666,70 @@ impl ServerManager {
         self.shutdown_trigger.trigger();
     }
 
-    pub fn set_head(&mut self, is_head: bool) {
+    pub fn set_pred(&mut self, pred_addr: Option<String>) {
+        //Set the predecessor
+        let mut pred_addr_write = block_on(self.shared_data.pred_addr.write());
+        *pred_addr_write = pred_addr.clone();
+        drop(pred_addr_write);
+
+        //Set is_head
+        match pred_addr {
+            Some(_) => {
+                self.set_head(false);
+            },
+            None => {
+                self.set_head(false);
+            }
+        }
+    }
+
+    pub fn set_succ(&mut self, succ_addr: Option<String>) {
+        //Set the successor
+        let mut succ_addr_write = block_on(self.shared_data.succ_addr.write());
+        *succ_addr_write = succ_addr.clone();
+        drop(succ_addr_write);
+
+        //Set is_tail
+        match succ_addr {
+            Some(_) => {
+                self.set_tail(false);
+
+                //Sent a state transfer
+                let shared_data_clone = self.shared_data.clone();
+                let succ_addr_str = succ_addr.unwrap();
+
+                tokio::spawn(async move {
+                    ReplicaService::send_state_transfer(shared_data_clone, succ_addr_str).await
+                });
+            },
+            None => {
+                self.set_tail(true);
+            }
+        }
+    }
+
+    fn set_head(&mut self, is_head: bool) {
         #[cfg(debug_assertions)]
         println!("Setting head service status to: {}", is_head);
 
         let mut is_head_write = block_on(self.shared_data.is_head.write());
         *is_head_write = is_head;
         drop(is_head_write);
+
+        //If the replica is the head, then it doesn't need a state transfer
+        if is_head {
+            let mut new_tail_write = block_on(self.shared_data.new_tail.write());
+            *new_tail_write = false;
+            drop(new_tail_write);
+        }
     }
 
-    pub fn set_tail(&mut self, is_tail: bool) {
+    fn set_tail(&mut self, is_tail: bool) {
         #[cfg(debug_assertions)]
         println!("Setting tail service status to: {}", is_tail);
 
         let mut is_tail_write = block_on(self.shared_data.is_tail.write());
         *is_tail_write = is_tail;
         drop(is_tail_write);
-    }
-
-    pub fn set_new_tail(&mut self, new_tail: bool) {
-        #[cfg(debug_assertions)]
-        println!("Setting new tail status to: {}", new_tail);
-
-        let mut new_tail_write = block_on(self.shared_data.new_tail.write());
-        *new_tail_write = new_tail;
-        drop(new_tail_write);
     }
 }
