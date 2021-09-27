@@ -9,16 +9,14 @@ use std::net::SocketAddr;
 use async_std::sync::{Arc, RwLock};
 use tonic::{transport::Server, Request, Response, Status, Code};
 use tokio::time::{sleep, Duration};
-use futures::executor;
+use futures::executor::block_on;
 use triggered::{Trigger, Listener};
 
 //Head
 use chain::head_chain_replica_server::{HeadChainReplica, HeadChainReplicaServer};
-use chain::head_chain_replica_client::HeadChainReplicaClient;
 use chain::{IncRequest, HeadResponse};
 //Tail
 use chain::tail_chain_replica_server::{TailChainReplica, TailChainReplicaServer};
-use chain::tail_chain_replica_client::TailChainReplicaClient;
 use chain::{GetRequest, GetResponse};
 //Replica
 use chain::replica_server::{Replica, ReplicaServer};
@@ -38,22 +36,25 @@ pub struct ReplicaData {
     pub my_addr: String,
     pub pred_addr: Arc<RwLock<Option<String>>>,
     pub succ_addr: Arc<RwLock<Option<String>>>,
+    pub is_head: Arc<RwLock<bool>>,
+    pub is_tail: Arc<RwLock<bool>>,
     pub new_tail: Arc<RwLock<bool>>,
 }
 
 pub struct HeadChainReplicaService {
     shared_data: Arc<ReplicaData>,
-    is_paused: Arc<RwLock<bool>>,
 }
 
 #[tonic::async_trait]
 impl HeadChainReplica for HeadChainReplicaService {
     async fn increment(&self, request: Request<IncRequest>) ->
     Result<Response<HeadResponse>, Status> {
-        let is_paused_read = self.is_paused.read().await;
+        let is_head_read = self.shared_data.is_head.read().await;
+        let is_head = *is_head_read;
+        drop(is_head_read);
 
         //Ignore the request if the replica is not the head
-        if *is_paused_read {
+        if !is_head {
             #[cfg(debug_assertions)]
             println!("Received IncRequest, but this replica is not the head");
 
@@ -129,16 +130,18 @@ impl HeadChainReplica for HeadChainReplicaService {
 
 pub struct TailChainReplicaService {
     shared_data: Arc<ReplicaData>,
-    is_paused: Arc<RwLock<bool>>,
 }
 
 #[tonic::async_trait]
 impl TailChainReplica for TailChainReplicaService {
     async fn get(&self, request: Request<GetRequest>) ->
     Result<Response<GetResponse>, Status> {
-        let is_paused_read =  self.is_paused.read().await;
+        let is_tail_read = self.shared_data.is_tail.read().await;
+        let is_tail = *is_tail_read;
+        drop(is_tail_read);
 
-        if *is_paused_read {
+        //Ignore the request if the replica is not the tail
+        if !is_tail {
             #[cfg(debug_assertions)]
             println!("Received GetRequest, but this replica is not the tail");
 
@@ -171,22 +174,20 @@ impl TailChainReplica for TailChainReplicaService {
 
 pub struct ReplicaService {
     shared_data: Arc<ReplicaData>,
-    is_paused: Arc<RwLock<bool>>,
 }
 
 impl ReplicaService {
     //Sent a state transfer to the successor server
     async fn transfer_state(shared_data: Arc<ReplicaData>) {
-       loop {
+        loop {
+            //Discard the update if this is the tail
+            let is_tail_read = shared_data.is_tail.read().await;
+            if *is_tail_read { return };
+            drop(is_tail_read);
+
             //Read the ip address of the successor
             let succ_addr_read = shared_data.succ_addr.read().await;
-
-            let succ_addr = match &(*succ_addr_read) {
-                Some(addr) => addr.clone(),
-                //Discard the update if there is no successor
-                None => return,
-            };
-
+            let succ_addr = (*succ_addr_read).as_ref().unwrap().clone();
             drop(succ_addr_read);
 
             //Connect to the successor replica service
@@ -252,15 +253,14 @@ impl ReplicaService {
         let request_ref = request.get_ref();
 
         loop {
+            //Discard the update if this is the tail
+            let is_tail_read = shared_data.is_tail.read().await;
+            if *is_tail_read { return };
+            drop(is_tail_read);
+
             //Read the ip address of the successor
             let succ_addr_read = shared_data.succ_addr.read().await;
-
-            let succ_addr = match &(*succ_addr_read) {
-                Some(addr) => addr.clone(),
-                //Discard the update if there is no successor
-                None => return,
-            };
-
+            let succ_addr = (*succ_addr_read).as_ref().unwrap().clone();
             drop(succ_addr_read);
 
             //Connect to the successor replica service
@@ -316,15 +316,14 @@ impl ReplicaService {
         let request_ref = request.get_ref();
 
         loop {
-            //Read the ip address of the predecessor
+            //Discard the update if this is the head
+            let is_head_read = shared_data.is_head.read().await;
+            if *is_head_read { return };
+            drop(is_head_read);
+
+            //Read the ip address of the successor
             let pred_addr_read = shared_data.pred_addr.read().await;
-
-            let pred_addr = match &(*pred_addr_read) {
-                Some(addr) => addr.clone(),
-                //Discard the ack if there is no predecessor
-                None => return,
-            };
-
+            let pred_addr = (*pred_addr_read).as_ref().unwrap().clone();
             drop(pred_addr_read);
 
             //Connect to the predecessor replica service
@@ -338,7 +337,7 @@ impl ReplicaService {
 
                     match update_result {
                         //Ack was successful
-                        Ok(response) => return,
+                        Ok(_) => return,
                         //If the AckRequest failed, retry
                         Err(_) => {
                             #[cfg(debug_assertions)]
@@ -410,26 +409,24 @@ impl Replica for ReplicaService {
             (*sent_write).push(request_ref.clone());
             drop(sent_write);
 
-            //Read the ip address of the successor
-            let succ_addr_read = self.shared_data.succ_addr.read().await;
-            let succ_addr = (*succ_addr_read).clone();
-            drop(succ_addr_read);
+            //Check if this replica is the tail
+            let is_tail_read = self.shared_data.is_tail.read().await;
+            let is_tail = *is_tail_read;
+            drop(is_tail_read);
 
             let shared_data_clone = self.shared_data.clone();
 
-            match succ_addr {
-                //If there is a successor, forward the update
-                Some(addr) => {
+            //If this replica is the tail, send an ack to the predecessor
+            if is_tail {
+                let ack_request = Request::<chain::AckRequest>::new(chain::AckRequest { xid: curr_xid });
+                ReplicaService::send_ack(shared_data_clone, ack_request).await
+            }
+            //If there is a successor, forward the update
+            else {
                     tokio::spawn(async move {
                         ReplicaService::forward_update(shared_data_clone, request).await
                     });
-                },
-                //If this replica is the tail, send an ack to the predecessor
-                None => {
-                    let ack_request = Request::<chain::AckRequest>::new(chain::AckRequest { xid: curr_xid });
-                    ReplicaService::send_ack(shared_data_clone, ack_request).await
-                },
-            };
+            }
 
             //Return an UpdateResponse
             let update_response = chain::UpdateResponse { rc: 0 };
@@ -475,66 +472,34 @@ impl Replica for ReplicaService {
 }
 
 
-pub enum ChainService {
-    HEAD,
-    TAIL,
-    REPLICA
-}
-
 pub struct ServerManager {
     //Service data
     shared_data: Arc<ReplicaData>,
-    head_paused: Arc<RwLock<bool>>,
-    tail_paused: Arc<RwLock<bool>>,
-    replica_paused: Arc<RwLock<bool>>,
     //Server data
     shutdown_trigger: Trigger,
     shutdown_listener: Listener,
 }
 
 impl ServerManager {
-    pub fn new(shared_data: Arc<ReplicaData>)
-    -> Result<ServerManager, Box<dyn std::error::Error>> {
+    pub fn new(shared_data: Arc<ReplicaData>) -> ServerManager  {
         let (trigger, listener) = triggered::trigger();
 
-        Ok(ServerManager {
+        ServerManager {
             shared_data: shared_data.clone(),
-            head_paused: Arc::new(RwLock::new(false)),
-            tail_paused: Arc::new(RwLock::new(false)),
-            replica_paused: Arc::new(RwLock::new(false)),
             shutdown_trigger: trigger,
             shutdown_listener: listener,
-        })
+        }
     }
     
-    pub fn start(&mut self, socket: SocketAddr, head_paused: bool, tail_paused: bool, replica_paused: bool) ->
-    Result<(), Box<dyn std::error::Error>> {
-        //Set the paused status of all three services
-        if head_paused {
-            executor::block_on(self.pause(ChainService::HEAD));
-        }
-        if tail_paused {
-            executor::block_on(self.pause(ChainService::TAIL));
-        }
-        if replica_paused {
-            executor::block_on(self.pause(ChainService::REPLICA));
-        }
+    pub fn start(&mut self, socket: SocketAddr, is_head: bool, is_tail: bool, new_tail: bool) {
+        self.set_head(is_head);
+        self.set_tail(is_tail);
+        self.set_new_tail(new_tail);
 
         //Create the service structs
-        let head_service = HeadChainReplicaService {
-            shared_data: self.shared_data.clone(),
-            is_paused: self.head_paused.clone(),
-        };
-
-        let tail_service = TailChainReplicaService {
-            shared_data: self.shared_data.clone(),
-            is_paused: self.tail_paused.clone(),
-        };
-
-        let replica_service = ReplicaService {
-            shared_data: self.shared_data.clone(),
-            is_paused: self.replica_paused.clone(),
-        };
+        let head_service = HeadChainReplicaService { shared_data: self.shared_data.clone() };
+        let tail_service = TailChainReplicaService { shared_data: self.shared_data.clone() };
+        let replica_service = ReplicaService { shared_data: self.shared_data.clone() };
 
         //Add all three services to a server
         let head_server = Server::builder()
@@ -548,39 +513,36 @@ impl ServerManager {
         let _ = tokio::spawn(async move {
             let _ = head_server.serve_with_shutdown(socket, listener).await;
         });
-
-        Ok(())
     }
 
     pub fn stop(self,) {
         self.shutdown_trigger.trigger();
     }
 
-    pub async fn pause(&mut self, service: ChainService) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn set_head(&mut self, is_head: bool) {
         #[cfg(debug_assertions)]
-        println!("Pausing head service");
+        println!("Setting head service status to: {}", is_head);
 
-        let mut paused_write = match service {
-            ChainService::HEAD => self.head_paused.write().await,
-            ChainService::TAIL => self.tail_paused.write().await,
-            ChainService::REPLICA => self.replica_paused.write().await,
-        };
-
-        *paused_write = true;
-        Ok(())
+        let mut is_head_write = block_on(self.shared_data.is_head.write());
+        *is_head_write = is_head;
+        drop(is_head_write);
     }
 
-    pub async fn resume(&mut self, service: ChainService) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn set_tail(&mut self, is_tail: bool) {
         #[cfg(debug_assertions)]
-        println!("Resuming head service");
+        println!("Setting tail service status to: {}", is_tail);
 
-        let mut paused_write = match service {
-            ChainService::HEAD => self.head_paused.write().await,
-            ChainService::TAIL => self.tail_paused.write().await,
-            ChainService::REPLICA => self.replica_paused.write().await,
-        };
-        
-        *paused_write = false;
-        Ok(())
+        let mut is_tail_write = block_on(self.shared_data.is_tail.write());
+        *is_tail_write = is_tail;
+        drop(is_tail_write);
+    }
+
+    pub fn set_new_tail(&mut self, new_tail: bool) {
+        #[cfg(debug_assertions)]
+        println!("Setting new tail status to: {}", new_tail);
+
+        let mut new_tail_write = block_on(self.shared_data.new_tail.write());
+        *new_tail_write = new_tail;
+        drop(new_tail_write);
     }
 }

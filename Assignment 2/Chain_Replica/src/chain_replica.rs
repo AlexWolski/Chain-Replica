@@ -18,7 +18,6 @@ mod replica_manager {
     use std::collections::HashMap;
     use std::net::{SocketAddr};
     use async_std::sync::{Arc, RwLock};
-    use tonic::{Request};
     use local_ip_address::{local_ip, list_afinet_netifas};
     use zookeeper::{CreateMode, ZooKeeper, ZkState};
     use grpc_services::{ReplicaData, ServerManager};
@@ -358,7 +357,9 @@ mod replica_manager {
                 pred_addr: Arc::new(RwLock::new(Option::<String>::None)),
                 succ_addr: Arc::new(RwLock::new(Option::<String>::None)),
                 //Assume that every node is added to the end of the chain
-                new_tail: Arc::new(RwLock::new(false)),
+                is_head: Arc::new(RwLock::new(false)),
+                is_tail: Arc::new(RwLock::new(false)),
+                new_tail: Arc::new(RwLock::new(true)),
             });
 
             Ok(Replica {
@@ -370,19 +371,15 @@ mod replica_manager {
                 //Data shared by all services
                 shared_data: shared_data.clone(),
                 //Instantiate Servers
-                server: ServerManager::new(shared_data.clone())?,
+                server: ServerManager::new(shared_data.clone()),
             })
         }
 
         pub fn start(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-            let mut pause_head = true;
-
-            if self.is_head()? {
-                pause_head = false;
-            }
-
-            self.server.start(self.socket.clone(), false, false, pause_head);
-
+            let is_head = self.is_head()?;
+            //If this is the first replica in the chain, activate
+            //the head service and don't request a state transfer
+            self.server.start(self.socket.clone(), is_head, true, !is_head);
             Ok(())
         }
 
@@ -415,7 +412,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("");
     let mut replica = replica_manager::Replica::new(&args[1], &args[2], server_port, name)?;
-    replica.start();
+    replica.start()?;
     println!("");
 
     match signal::ctrl_c().await {
