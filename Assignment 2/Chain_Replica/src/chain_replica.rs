@@ -15,13 +15,11 @@ mod replica_manager {
     use super::*;
     use std::io::{Error, ErrorKind};
     use std::ops::Range;
-    use std::collections::HashMap;
     use std::net::{SocketAddr};
-    use async_std::sync::{Arc, RwLock};
+    use async_std::sync::Arc;
     use local_ip_address::{local_ip, list_afinet_netifas};
     use zookeeper::{CreateMode, ZooKeeper, ZkState};
     use grpc_services::{ReplicaData, ServerManager};
-    use grpc_services::chain::{UpdateRequest};
 
     //The delimiting character separating the address and name in the znode data
     static ZNODE_DELIM: &str = "\n";
@@ -348,19 +346,7 @@ mod replica_manager {
             println!("Listening on: {}", server_addr);
 
             //Create the shared data for the servers
-            let shared_data = Arc::new(ReplicaData{
-                database: Arc::new(RwLock::new(HashMap::<String, u32>::new())),
-                xid: Arc::new(RwLock::new(0)),
-                sent: Arc::new(RwLock::new(Vec::<UpdateRequest>::new())),
-                ack: Arc::new(RwLock::new(Vec::<u32>::new())),
-                my_addr: server_addr,
-                pred_addr: Arc::new(RwLock::new(Option::<String>::None)),
-                succ_addr: Arc::new(RwLock::new(Option::<String>::None)),
-                //Assume that every node is added to the end of the chain
-                is_head: Arc::new(RwLock::new(false)),
-                is_tail: Arc::new(RwLock::new(false)),
-                new_tail: Arc::new(RwLock::new(true)),
-            });
+            let shared_data = Arc::new(ReplicaData::new(server_addr));
 
             Ok(Replica {
                 //ZooKeeper data

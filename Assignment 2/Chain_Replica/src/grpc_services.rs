@@ -41,6 +41,23 @@ pub struct ReplicaData {
     pub new_tail: Arc<RwLock<bool>>,
 }
 
+impl ReplicaData {
+    pub fn new(server_addr: String) -> ReplicaData  {
+        ReplicaData{
+            database: Arc::new(RwLock::new(HashMap::<String, u32>::new())),
+            xid: Arc::new(RwLock::new(0)),
+            sent: Arc::new(RwLock::new(Vec::<UpdateRequest>::new())),
+            ack: Arc::new(RwLock::new(Vec::<u32>::new())),
+            my_addr: server_addr,
+            pred_addr: Arc::new(RwLock::new(Option::<String>::None)),
+            succ_addr: Arc::new(RwLock::new(Option::<String>::None)),
+            is_head: Arc::new(RwLock::new(false)),
+            is_tail: Arc::new(RwLock::new(false)),
+            new_tail: Arc::new(RwLock::new(true)),
+        }
+    }
+}
+
 pub struct HeadChainReplicaService {
     shared_data: Arc<ReplicaData>,
 }
