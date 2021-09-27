@@ -11,6 +11,17 @@
 mod grpc_services;
 mod zk_manager;
 
+//Global Constants
+
+//The delimiting character separating the address and name in the znode data
+static ZNODE_DELIM: &str = "\n";
+//The znode name prefix for all replicas
+static ZNODE_PREFIX: &str = "replica-";
+//The length of the sequence number ZooKeeper adds to znodes
+static SEQUENCE_LEN: u32 = 10;
+//The duration in milliseconds between ZooKeeper updates
+static UPDATE_DELAY: u64 = 200;
+
 mod replica_manager {
     use super::*;
     use std::io::{Error, ErrorKind};
@@ -20,13 +31,6 @@ mod replica_manager {
     use local_ip_address::{local_ip, list_afinet_netifas};
     use zookeeper::{CreateMode, ZooKeeper, ZkState};
     use grpc_services::{ReplicaData, ServerManager};
-
-    //The delimiting character separating the address and name in the znode data
-    static ZNODE_DELIM: &str = "\n";
-    //The znode name prefix for all replicas
-    static ZNODE_PREFIX: &str = "replica-";
-    //The length of the sequence number ZooKeeper adds to znodes
-    static SEQUENCE_LEN: u32 = 10;
 
 
     pub struct Replica {
@@ -373,6 +377,17 @@ mod replica_manager {
             self.server.stop();
             Ok(())
         }
+
+        //Check for changes in ZooKeeper
+        pub fn update(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+            let pred_addr = self.get_pred()?;
+            let succ_addr = self.get_succ()?;
+            
+            self.server.set_pred(pred_addr);
+            self.server.set_succ(succ_addr);
+
+            Ok(())
+        }
     }
 }
 
@@ -386,7 +401,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     use std::env;
     use std::io::{Error, ErrorKind};
-    use tokio::signal;
+    //use tokio::signal;
+    use tokio::time::{sleep, Duration};
 
     let args: Vec<String> = env::args().collect();
 
@@ -401,13 +417,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     replica.start()?;
     println!("");
 
-    match signal::ctrl_c().await {
-        Ok(()) => {
-            replica.stop()?;
-            println!("Shutting replica down\n");
-            Ok(())
-        },
-
-        Err(_) => { Err(Error::new(ErrorKind::Other, "Failed to listen for a shutdown signal").into()) },
+    //Rust ZooKeeper watches only trigger once, so monitoring needs to be performed in a loop
+    loop {
+        replica.update()?;
+        sleep(Duration::from_millis(UPDATE_DELAY)).await;
     }
+
+    // To-do: Make graceful shutdown compatible with ZooKeeper
+    // match signal::ctrl_c().await {
+    //     Ok(()) => {
+    //         replica.stop()?;
+    //         println!("Shutting replica down\n");
+    //         Ok(())
+    //     },
+
+    //     Err(_) => { Err(Error::new(ErrorKind::Other, "Failed to listen for a shutdown signal").into()) },
+    // }
 }

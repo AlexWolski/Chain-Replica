@@ -667,6 +667,22 @@ impl ServerManager {
     }
 
     pub fn set_pred(&mut self, pred_addr: Option<String>) {
+        #[cfg(debug_assertions)]
+        {
+            //Get current predecessor
+            let pred_addr_read = block_on(self.shared_data.pred_addr.read());
+            let curr_pred_addr = pred_addr_read.clone();
+            drop(pred_addr_read);
+
+            //If the predecessor changed, print the new value
+            if curr_pred_addr != pred_addr.clone() {
+                match pred_addr.clone() {
+                    Some(addr) => println!("Setting predecessor to: {}", addr),
+                    None => println!("Setting predecessor to nothing"),
+                }
+            };
+        }
+
         //Set the predecessor
         let mut pred_addr_write = block_on(self.shared_data.pred_addr.write());
         *pred_addr_write = pred_addr.clone();
@@ -678,12 +694,28 @@ impl ServerManager {
                 self.set_head(false);
             },
             None => {
-                self.set_head(false);
+                self.set_head(true);
             }
         }
     }
 
     pub fn set_succ(&mut self, succ_addr: Option<String>) {
+        #[cfg(debug_assertions)]
+        {
+            //Get current successor
+            let succ_addr_read = block_on(self.shared_data.succ_addr.read());
+            let curr_succ_addr = succ_addr_read.clone();
+            drop(succ_addr_read);
+
+            //If the successor changed, print the new value
+            if curr_succ_addr != succ_addr.clone() {
+                match succ_addr.clone() {
+                    Some(addr) => println!("Setting successor to: {}", addr),
+                    None => println!("Setting successor to nothing"),
+                }
+            };
+        }
+
         //Set the successor
         let mut succ_addr_write = block_on(self.shared_data.succ_addr.write());
         *succ_addr_write = succ_addr.clone();
@@ -710,7 +742,15 @@ impl ServerManager {
 
     fn set_head(&mut self, is_head: bool) {
         #[cfg(debug_assertions)]
-        println!("Setting head service status to: {}", is_head);
+        {
+            let mut is_head_read = block_on(self.shared_data.is_head.read());
+            let is_head_curr = *is_head_read;
+            drop(is_head_read);
+
+            if is_head_curr != is_head {
+                println!("Setting head service status to: {}", is_head);
+            }
+        }
 
         let mut is_head_write = block_on(self.shared_data.is_head.write());
         *is_head_write = is_head;
@@ -726,7 +766,15 @@ impl ServerManager {
 
     fn set_tail(&mut self, is_tail: bool) {
         #[cfg(debug_assertions)]
-        println!("Setting tail service status to: {}", is_tail);
+        {
+            let mut is_tail_read = block_on(self.shared_data.is_tail.read());
+            let is_tail_curr = *is_tail_read;
+            drop(is_tail_read);
+
+            if is_tail_curr != is_tail {
+                println!("Setting tail service status to: {}", is_tail);
+            }
+        }
 
         let mut is_tail_write = block_on(self.shared_data.is_tail.write());
         *is_tail_write = is_tail;
