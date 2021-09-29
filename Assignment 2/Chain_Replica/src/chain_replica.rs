@@ -258,42 +258,7 @@ mod replica_manager {
             }
         }
 
-        fn get_pred(&self) -> Result<Option<String>, Box<dyn std::error::Error>> {
-            //Get all children of the base node
-            let result = self.zk_instance.get_children(&self.base_path, false);
-
-            //Handle a connection error
-            match result {
-                Ok(_) => (),
-                Err(_) => return Err(Error::new(ErrorKind::Other, format!("Failed to get children in znode: {}", &self.base_path)).into())
-            };
-
-            let replica_list = result.as_ref().unwrap();
-            let mut replica_index = 0;
-
-            for replica in replica_list.iter() {
-                let curr_replica_id = Replica::get_replica_id(&replica)?;
-
-                if curr_replica_id == self.replica_id {
-                    //The replica is the head
-                    if replica_index == 0 {
-                        return Ok(None);
-                    }
-                    //Return the predecessor
-                    else {
-                        return Ok(Some(replica_list[replica_index - 1].to_owned()));
-                    }
-                }
-
-                replica_index += 1;
-            }
-
-            //There is an issue with the replica list
-            Err(Error::new(ErrorKind::InvalidData, format!("Invalid chain position: {}", replica_index)).into())
-        }
-
-
-        fn get_succ(&self) -> Result<Option<String>, Box<dyn std::error::Error>> {
+        fn get_neighbors(&self) -> Result<(Option<String>, Option<String>), Box<dyn std::error::Error>> {
             //Get all children of the base node
             let result = self.zk_instance.get_children(&self.base_path, false);
 
@@ -311,22 +276,27 @@ mod replica_manager {
                 let curr_replica_id = Replica::get_replica_id(&replica)?;
 
                 if curr_replica_id == self.replica_id {
-                    //The replica is the tail
-                    if replica_index == last_index {
-                        return Ok(None);
+                    let mut head = None;
+                    let mut tail = None;
+
+                    //Set the predecessor and successor if they exit
+                    if replica_index != 0 {
+                        head = Some(replica_list[replica_index - 1].to_owned());
                     }
-                    //Return the predecessor
-                    else {
-                        return Ok(Some(replica_list[replica_index + 1].to_owned()));
+                    if replica_index != last_index {
+                        tail = Some(replica_list[replica_index + 1].to_owned());
                     }
+
+                    return Ok((head, tail));
                 }
 
                 replica_index += 1;
             }
 
             //There is an issue with the replica list
-            Err(Error::new(ErrorKind::Other, format!("Invalid chain position: {}", replica_index)).into())
+            Err(Error::new(ErrorKind::InvalidData, format!("Invalid chain position: {}", replica_index)).into())
         }
+
 
         pub fn new(host_list: &str, base_path: &str, server_port: &str, name: &str)
         -> Result<Replica, Box<dyn std::error::Error>> {
@@ -366,10 +336,9 @@ mod replica_manager {
         }
 
         pub fn start(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-            let pred_addr = self.get_pred()?;
-            let succ_addr = self.get_succ()?;
+            let (pred_znode, succ_znode) = self.get_neighbors()?;
 
-            self.server.start(self.socket.clone(), pred_addr, succ_addr);
+            self.server.start(self.socket.clone(), pred_znode, succ_znode);
             Ok(())
         }
 
@@ -380,8 +349,7 @@ mod replica_manager {
 
         //Check for changes in ZooKeeper
         pub fn update(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-            let pred_znode = self.get_pred()?;
-            let succ_znode = self.get_succ()?;
+            let (pred_znode, succ_znode) = self.get_neighbors()?;
 
             let pred_addr = match pred_znode {
                 Some(znode) => {
