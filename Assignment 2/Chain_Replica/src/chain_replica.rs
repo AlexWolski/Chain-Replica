@@ -17,6 +17,7 @@ mod replica_manager {
     use std::ops::Range;
     use std::net::{SocketAddr};
     use std::sync::{Arc, RwLock};
+    use tokio::runtime::Handle;
     use local_ip_address::{local_ip, list_afinet_netifas};
     use zookeeper::{CreateMode, ZooKeeper, ZkState, WatchedEvent};
     use grpc_services::{ReplicaData, ServerManager};
@@ -165,7 +166,7 @@ mod replica_manager {
             //Create the shared data for the servers
             let shared_data = Arc::new(ReplicaData::new(server_addr));
             //Instantiate the server
-            let server = Arc::new(RwLock::new(Some(ServerManager::new(shared_data.clone()))));
+            let server = Arc::new(RwLock::new(Some(ServerManager::new(shared_data.clone(), Handle::current()))));
 
             Ok(Replica {
                 socket: socket,
@@ -216,7 +217,7 @@ mod replica_manager {
             let _ = instance_read.get_children_w(&base_path_clone, move |event: WatchedEvent| {
                 println!("Event: {:?}", event);
                 //Update the replica with its predecessor and successor
-                //let _ = Replica::update(server.clone(), instance.clone(), base_path.clone(), replica_id);
+                let _ = Replica::update(server.clone(), instance.clone(), base_path.clone(), replica_id);
 
                 //Add another watch
                 Replica::add_zk_watchers(server.clone(), instance.clone(), base_path.clone(), replica_id);

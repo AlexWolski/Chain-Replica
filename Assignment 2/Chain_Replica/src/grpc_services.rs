@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use async_std::sync::{Arc, RwLock};
 use tonic::{transport::Server, Request, Response, Status, Code};
+use tokio::runtime::Handle;
 use tokio::time::{sleep, Duration};
 use tokio::sync::broadcast;
 use futures::executor::block_on;
@@ -67,6 +68,7 @@ impl ReplicaData {
 
 pub struct HeadChainReplicaService {
     shared_data: Arc<ReplicaData>,
+    tokio_rt: Handle,
 }
 
 #[tonic::async_trait]
@@ -124,7 +126,7 @@ impl HeadChainReplica for HeadChainReplicaService {
 
             //Send the UpdateRequest
             //No need to check for errors since its the local replica service
-            tokio::spawn(async move {
+            self.tokio_rt.spawn(async move {
                 let _ = replica_client.update(update_request).await;
             });
 
@@ -148,6 +150,7 @@ impl HeadChainReplica for HeadChainReplicaService {
 
 pub struct TailChainReplicaService {
     shared_data: Arc<ReplicaData>,
+    tokio_rt: Handle,
 }
 
 #[tonic::async_trait]
@@ -192,6 +195,7 @@ impl TailChainReplica for TailChainReplicaService {
 
 pub struct ReplicaService {
     shared_data: Arc<ReplicaData>,
+    tokio_rt: Handle,
 }
 
 impl ReplicaService {
@@ -272,6 +276,7 @@ impl ReplicaService {
     }
 
     //Forward the update request to the successor server
+    //This method must be created from within a tokio runtime
     async fn forward_update(shared_data: Arc<ReplicaData>, request: Request<UpdateRequest>, succ_addr: String) {
         let request_ref = request.get_ref();
 
@@ -467,7 +472,7 @@ impl Replica for ReplicaService {
             if is_tail {
                 let ack_request = Request::<chain::AckRequest>::new(chain::AckRequest { xid: request_ref.xid });
 
-                tokio::spawn(async move {
+                self.tokio_rt.spawn(async move {
                     ReplicaService::send_ack(shared_data_clone, ack_request).await
                 });
             }
@@ -478,7 +483,7 @@ impl Replica for ReplicaService {
                 let succ_addr = (*succ_addr_read).as_ref().unwrap().clone();
                 drop(succ_addr_read);
 
-                tokio::spawn(async move {
+                self.tokio_rt.spawn(async move {
                     ReplicaService::forward_update(shared_data_clone, request, succ_addr).await
                 });
             }
@@ -527,7 +532,7 @@ impl Replica for ReplicaService {
                     let mut replica_client = ReplicaClient::connect(uri.clone()).await.unwrap();
 
                     //The update threads won't complete until the locks are released
-                    tokio::spawn(async move {
+                    self.tokio_rt.spawn(async move {
                         let _ = replica_client.update(update_request).await;
                     });
                 } 
@@ -540,7 +545,7 @@ impl Replica for ReplicaService {
                 let shared_data_clone = self.shared_data.clone();
                 let ack_request = Request::<chain::AckRequest>::new(chain::AckRequest { xid: missing_xid });
 
-                tokio::spawn(async move {
+                self.tokio_rt.spawn(async move {
                     ReplicaService::send_ack(shared_data_clone, ack_request).await
                 });
 
@@ -605,7 +610,7 @@ impl Replica for ReplicaService {
         let shared_data_clone = self.shared_data.clone();
 
         //Forward the ack to the predecessor
-        tokio::spawn(async move {
+        self.tokio_rt.spawn(async move {
             ReplicaService::send_ack(shared_data_clone, request).await
         });
 
@@ -626,16 +631,19 @@ pub struct ServerManager {
     //Server data
     shutdown_trigger: Trigger,
     shutdown_listener: Listener,
+    //Tokio runtime environment
+    tokio_rt: Handle,
 }
 
 impl ServerManager {
-    pub fn new(shared_data: Arc<ReplicaData>) -> ServerManager  {
+    pub fn new(shared_data: Arc<ReplicaData>, tokio_rt: Handle) -> ServerManager  {
         let (trigger, listener) = triggered::trigger();
 
         ServerManager {
             shared_data: shared_data.clone(),
             shutdown_trigger: trigger,
             shutdown_listener: listener,
+            tokio_rt: tokio_rt.clone(),
         }
     }
     
@@ -644,9 +652,9 @@ impl ServerManager {
         self.set_succ(succ_addr);
 
         //Create the service structs
-        let head_service = HeadChainReplicaService { shared_data: self.shared_data.clone() };
-        let tail_service = TailChainReplicaService { shared_data: self.shared_data.clone() };
-        let replica_service = ReplicaService { shared_data: self.shared_data.clone() };
+        let head_service = HeadChainReplicaService { shared_data: self.shared_data.clone(), tokio_rt: self.tokio_rt.clone() };
+        let tail_service = TailChainReplicaService { shared_data: self.shared_data.clone(), tokio_rt: self.tokio_rt.clone() };
+        let replica_service = ReplicaService { shared_data: self.shared_data.clone(), tokio_rt: self.tokio_rt.clone() };
 
         //Add all three services to a server
         let head_server = Server::builder()
@@ -657,12 +665,12 @@ impl ServerManager {
         //Start the server
         let listener = self.shutdown_listener.clone();
 
-        let _ = tokio::spawn(async move {
+        let _ = self.tokio_rt.spawn(async move {
             let _ = head_server.serve_with_shutdown(socket, listener).await;
         });
     }
 
-    pub fn stop(self,) {
+    pub fn stop(self) {
         self.shutdown_trigger.trigger();
     }
 
@@ -730,7 +738,7 @@ impl ServerManager {
                 let shared_data_clone = self.shared_data.clone();
                 let succ_addr_str = succ_addr.unwrap();
 
-                tokio::spawn(async move {
+                self.tokio_rt.spawn(async move {
                     ReplicaService::send_state_transfer(shared_data_clone, succ_addr_str).await
                 });
             },
