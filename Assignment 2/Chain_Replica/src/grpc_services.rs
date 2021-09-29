@@ -251,7 +251,7 @@ impl ReplicaService {
                                 //Invalid status code
                                 rc => {
                                     #[cfg(debug_assertions)]
-                                    println!("Successor returned StateTransferResponse with invalid code: '{}'. Retrying...", rc);
+                                    println!("Successor returned StateTransferRequest with invalid code: '{}'. Retrying...", rc);
                                     sleep(Duration::from_millis(RETRY_WAIT)).await;
                                 }
                             }
@@ -259,7 +259,7 @@ impl ReplicaService {
                         //If the request could not be sent, retry
                         Err(_) => {
                             #[cfg(debug_assertions)]
-                            println!("Failed to send a StateTransferResponse to the successor at address: '{}'. Retrying...", succ_addr);
+                            println!("Failed to send a StateTransferRequest to the successor at address: '{}'. Retrying...", succ_addr);
                             sleep(Duration::from_millis(RETRY_WAIT)).await;
                         },
                     }
