@@ -182,33 +182,7 @@ mod replica_manager {
         }
 
         pub fn start(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-            let (pred_znode, succ_znode) = zk_manager::get_neighbors(self.zk_instance.clone(), &self.base_path, self.replica_id)?;
-
-            //Predecessor
-            let pred_addr = match pred_znode {
-                Some(znode) => {
-                    let znode_full = format!("{}/{}", &self.base_path, znode);
-
-                    match zk_manager::get_node_address(self.zk_instance.clone(), &znode_full) {
-                        Ok(addr) => Some(addr),
-                        Err(err) => return Err(err)
-                    }
-                },
-                None => None,
-            };
-
-            //Successor
-            let succ_addr = match succ_znode {
-                Some(znode) => {
-                    let znode_full = format!("{}/{}", &self.base_path, znode);
-
-                    match zk_manager::get_node_address(self.zk_instance.clone(), &znode_full) {
-                        Ok(addr) => Some(addr),
-                        Err(err) => return Err(err)
-                    }
-                },
-                None => None,
-            };
+            let (pred_addr, succ_addr) = zk_manager::get_neighbor_addrs(self.zk_instance.clone(), &self.base_path, self.replica_id)?;
 
             //Start the server
             let mut server_write = self.server.write().unwrap();
@@ -256,33 +230,7 @@ mod replica_manager {
         //Check for changes in ZooKeeper
         fn update(server: Arc<RwLock<Option<ServerManager>>>, instance: Arc<RwLock<ZooKeeper>>, base_path: String, replica_id: u32) ->
         Result<(), Box<dyn std::error::Error>> {
-            let (pred_znode, succ_znode) = zk_manager::get_neighbors(instance.clone(), &base_path, replica_id)?;
-
-            //Predecessor
-            let pred_addr = match pred_znode {
-                Some(znode) => {
-                    let znode_full = format!("{}/{}", &base_path, znode);
-
-                    match zk_manager::get_node_address(instance.clone(), &znode_full) {
-                        Ok(addr) => Some(addr),
-                        Err(err) => return Err(err)
-                    }
-                },
-                None => None,
-            };
-
-            //Successor
-            let succ_addr = match succ_znode {
-                Some(znode) => {
-                    let znode_full = format!("{}/{}", &base_path, znode);
-
-                    match zk_manager::get_node_address(instance.clone(), &znode_full) {
-                        Ok(addr) => Some(addr),
-                        Err(err) => return Err(err)
-                    }
-                },
-                None => None,
-            };
+            let (pred_addr, succ_addr) = zk_manager::get_neighbor_addrs(instance.clone(), &base_path.clone(), replica_id)?;
             
             let mut server_write = server.write().unwrap();
             let mut server_instance = server_write.as_mut().unwrap();

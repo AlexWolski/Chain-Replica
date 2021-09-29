@@ -90,7 +90,8 @@ pub fn format_znode_data(server_addr: &str, name: &str) -> String {
     return format!("{}{}{}", server_addr, ZNODE_DELIM, name);
 }
 
-pub fn get_neighbors(instance: Arc<RwLock<ZooKeeper>>, base_path: &str, replica_id: u32) -> Result<(Option<String>, Option<String>), Box<dyn std::error::Error>> {
+pub fn get_neighbor_znodes(instance: Arc<RwLock<ZooKeeper>>, base_path: &str, replica_id: u32) ->
+Result<(Option<String>, Option<String>), Box<dyn std::error::Error>> {
     //Get all children of the base node
     let instance_read = instance.read().unwrap();
     let result = instance_read.get_children(&base_path, false);
@@ -129,6 +130,39 @@ pub fn get_neighbors(instance: Arc<RwLock<ZooKeeper>>, base_path: &str, replica_
 
     //There is an issue with the replica list
     Err(Error::new(ErrorKind::InvalidData, format!("Invalid chain position: {}", replica_index)).into())
+}
+
+pub fn get_neighbor_addrs(instance: Arc<RwLock<ZooKeeper>>, base_path: &str, replica_id: u32) ->
+Result<(Option<String>, Option<String>), Box<dyn std::error::Error>> {
+    let (pred_znode, succ_znode) = get_neighbor_znodes(instance.clone(), &base_path.clone(), replica_id)?;
+
+    //Predecessor
+    let pred_addr = match pred_znode {
+        Some(znode) => {
+            let znode_full = format!("{}/{}", &base_path, znode);
+
+            match get_node_address(instance.clone(), &znode_full) {
+                Ok(addr) => Some(addr),
+                Err(err) => return Err(err)
+            }
+        },
+        None => None,
+    };
+
+    //Successor
+    let succ_addr = match succ_znode {
+        Some(znode) => {
+            let znode_full = format!("{}/{}", &base_path, znode);
+
+            match get_node_address(instance.clone(), &znode_full) {
+                Ok(addr) => Some(addr),
+                Err(err) => return Err(err)
+            }
+        },
+        None => None,
+    };
+
+    Ok((pred_addr, succ_addr))
 }
 
 pub fn connect<Listener: Fn(ZkState) + Send + 'static>(host_list: &str, listener: Listener, timeout: u64)
