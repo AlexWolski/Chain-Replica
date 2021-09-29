@@ -184,10 +184,37 @@ mod replica_manager {
         pub fn start(&mut self) -> Result<(), Box<dyn std::error::Error>> {
             let (pred_znode, succ_znode) = zk_manager::get_neighbors(self.zk_instance.clone(), &self.base_path, self.replica_id)?;
 
+            //Predecessor
+            let pred_addr = match pred_znode {
+                Some(znode) => {
+                    let znode_full = format!("{}/{}", &self.base_path, znode);
+
+                    match zk_manager::get_node_address(self.zk_instance.clone(), &znode_full) {
+                        Ok(addr) => Some(addr),
+                        Err(err) => return Err(err)
+                    }
+                },
+                None => None,
+            };
+
+            //Successor
+            let succ_addr = match succ_znode {
+                Some(znode) => {
+                    let znode_full = format!("{}/{}", &self.base_path, znode);
+
+                    match zk_manager::get_node_address(self.zk_instance.clone(), &znode_full) {
+                        Ok(addr) => Some(addr),
+                        Err(err) => return Err(err)
+                    }
+                },
+                None => None,
+            };
+
             //Start the server
             let mut server_write = self.server.write().unwrap();
             let mut server_instance = server_write.as_mut().unwrap();
-            server_instance.start(self.socket.clone(), pred_znode, succ_znode);
+            server_instance.start(self.socket.clone(), pred_addr, succ_addr);
+
             drop(server_write);
 
             //Listen for ZooKeeper updates
