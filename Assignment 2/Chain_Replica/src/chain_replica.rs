@@ -17,9 +17,8 @@ mod replica_manager {
     use std::ops::Range;
     use std::net::{SocketAddr};
     use std::sync::{Arc, RwLock};
-    use std::ops::Deref;
     use local_ip_address::{local_ip, list_afinet_netifas};
-    use zookeeper::{CreateMode, ZooKeeper, ZkState};
+    use zookeeper::{CreateMode, ZooKeeper, ZkState, WatchedEvent};
     use grpc_services::{ReplicaData, ServerManager};
 
 
@@ -184,9 +183,14 @@ mod replica_manager {
         pub fn start(&mut self) -> Result<(), Box<dyn std::error::Error>> {
             let (pred_znode, succ_znode) = zk_manager::get_neighbors(self.zk_instance.clone(), &self.base_path, self.replica_id)?;
 
+            //Start the server
             let mut server_write = self.server.write().unwrap();
             let mut server_instance = server_write.as_mut().unwrap();
             server_instance.start(self.socket.clone(), pred_znode, succ_znode);
+            drop(server_write);
+
+            //Listen for ZooKeeper updates
+            Replica::add_zk_watchers(self.server.clone(), self.zk_instance.clone(), self.base_path.clone(), self.replica_id);
 
             Ok(())
         }
@@ -201,15 +205,35 @@ mod replica_manager {
             Ok(())
         }
 
+        fn add_zk_watchers(server: Arc<RwLock<Option<ServerManager>>>, instance: Arc<RwLock<ZooKeeper>>, base_path: String, replica_id: u32) {
+            //Clone variabes to be moved into the watch method
+            let instance_clone = instance.clone();
+            let base_path_clone = base_path.clone();
+
+            //Add the watch method
+            let instance_read = instance_clone.read().unwrap();
+
+            let _ = instance_read.get_children_w(&base_path_clone, move |event: WatchedEvent| {
+                println!("Event: {:?}", event);
+                //Update the replica with its predecessor and successor
+                //let _ = Replica::update(server.clone(), instance.clone(), base_path.clone(), replica_id);
+
+                //Add another watch
+                Replica::add_zk_watchers(server.clone(), instance.clone(), base_path.clone(), replica_id);
+            });
+
+            drop(instance_read);
+        }
+
         //Check for changes in ZooKeeper
-        pub fn update(server: Arc<RwLock<Option<ServerManager>>>, instance: Arc<RwLock<ZooKeeper>>, base_path: &str, replica_id: u32) ->
+        fn update(server: Arc<RwLock<Option<ServerManager>>>, instance: Arc<RwLock<ZooKeeper>>, base_path: String, replica_id: u32) ->
         Result<(), Box<dyn std::error::Error>> {
             let (pred_znode, succ_znode) = zk_manager::get_neighbors(instance.clone(), &base_path, replica_id)?;
 
             //Predecessor
             let pred_addr = match pred_znode {
                 Some(znode) => {
-                    let znode_full = format!("{}/{}", base_path, znode);
+                    let znode_full = format!("{}/{}", &base_path, znode);
 
                     match zk_manager::get_node_address(instance.clone(), &znode_full) {
                         Ok(addr) => Some(addr),
@@ -222,7 +246,7 @@ mod replica_manager {
             //Successor
             let succ_addr = match succ_znode {
                 Some(znode) => {
-                    let znode_full = format!("{}/{}", base_path, znode);
+                    let znode_full = format!("{}/{}", &base_path, znode);
 
                     match zk_manager::get_node_address(instance.clone(), &znode_full) {
                         Ok(addr) => Some(addr),
