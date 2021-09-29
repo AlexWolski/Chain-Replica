@@ -54,13 +54,12 @@ impl ReplicaData {
             last_ack: Arc::new(RwLock::new(0)),
             sent: Arc::new(RwLock::new(Vec::<UpdateRequest>::new())),
             my_addr: server_addr,
+            //Assume that the replica is added to an empty chain
             pred_addr: Arc::new(RwLock::new(Option::<String>::None)),
             succ_addr: Arc::new(RwLock::new(Option::<String>::None)),
-            is_head: Arc::new(RwLock::new(false)),
-            is_tail: Arc::new(RwLock::new(false)),
-            //new_tail is true by default since replicas are added to the end of chains
-            //If the replica is both the head and the tail, then new_tail is set to false
-            new_tail: Arc::new(RwLock::new(true)),
+            is_head: Arc::new(RwLock::new(true)),
+            is_tail: Arc::new(RwLock::new(true)),
+            new_tail: Arc::new(RwLock::new(false)),
             ack_event: broadcast::channel(1).0,
         }
     }
@@ -648,6 +647,13 @@ impl ServerManager {
     }
     
     pub fn start(&mut self, socket: SocketAddr, pred_addr: Option<String>, succ_addr: Option<String>) {
+        //If there is a predecessor, set new_tail to indicate a state transfer is needed
+        if pred_addr.is_some() {
+            let mut new_tail_write = block_on(self.shared_data.new_tail.write());
+            *new_tail_write = false;
+            drop(new_tail_write);
+        }
+
         self.set_pred(pred_addr);
         self.set_succ(succ_addr);
 
@@ -675,115 +681,68 @@ impl ServerManager {
     }
 
     pub fn set_pred(&mut self, pred_addr: Option<String>) {
-        #[cfg(debug_assertions)]
-        {
-            //Get current predecessor
-            let pred_addr_read = block_on(self.shared_data.pred_addr.read());
-            let curr_pred_addr = pred_addr_read.clone();
-            drop(pred_addr_read);
+        //Get current predecessor
+        let pred_addr_read = block_on(self.shared_data.pred_addr.read());
+        let curr_pred_addr = pred_addr_read.clone();
+        drop(pred_addr_read);
 
-            //If the predecessor changed, print the new value
-            if curr_pred_addr != pred_addr.clone() {
-                match pred_addr.clone() {
-                    Some(addr) => println!("Setting predecessor to: {}", addr),
-                    None => println!("Setting predecessor to nothing"),
-                }
-            };
-        }
+        //Check if the predecessor changed
+        if curr_pred_addr != pred_addr.clone() {
+            #[cfg(debug_assertions)]
+            println!("Setting predecessor to: {:?}", pred_addr);
 
-        //Set the predecessor
-        let mut pred_addr_write = block_on(self.shared_data.pred_addr.write());
-        *pred_addr_write = pred_addr.clone();
-        drop(pred_addr_write);
+            //Set the predecessor
+            let mut pred_addr_write = block_on(self.shared_data.pred_addr.write());
+            *pred_addr_write = pred_addr.clone();
+            drop(pred_addr_write);
 
-        //Set is_head
-        match pred_addr {
-            Some(_) => {
-                self.set_head(false);
-            },
-            None => {
-                self.set_head(true);
+            //Set is_head
+            match pred_addr {
+                Some(addr) => self.set_head(false),
+                None => self.set_head(true),
             }
-        }
+        };
     }
 
     pub fn set_succ(&mut self, succ_addr: Option<String>) {
-        #[cfg(debug_assertions)]
-        {
-            //Get current successor
-            let succ_addr_read = block_on(self.shared_data.succ_addr.read());
-            let curr_succ_addr = succ_addr_read.clone();
-            drop(succ_addr_read);
+        //Get current succecessor
+        let succ_addr_read = block_on(self.shared_data.succ_addr.read());
+        let curr_succ_addr = succ_addr_read.clone();
+        drop(succ_addr_read);
 
-            //If the successor changed, print the new value
-            if curr_succ_addr != succ_addr.clone() {
-                match succ_addr.clone() {
-                    Some(addr) => println!("Setting successor to: {}", addr),
-                    None => println!("Setting successor to nothing"),
-                }
-            };
-        }
+        //Check if the succecessor changed
+        if curr_succ_addr != succ_addr.clone() {
+            #[cfg(debug_assertions)]
+            println!("Setting succecessor to: {:?}", succ_addr);
 
-        //Set the successor
-        let mut succ_addr_write = block_on(self.shared_data.succ_addr.write());
-        *succ_addr_write = succ_addr.clone();
-        drop(succ_addr_write);
+            //Set the succecessor
+            let mut succ_addr_write = block_on(self.shared_data.succ_addr.write());
+            *succ_addr_write = succ_addr.clone();
+            drop(succ_addr_write);
 
-        //Set is_tail
-        match succ_addr {
-            Some(_) => {
-                self.set_tail(false);
-
-                //Sent a state transfer
-                let shared_data_clone = self.shared_data.clone();
-                let succ_addr_str = succ_addr.unwrap();
-
-                self.tokio_rt.spawn(async move {
-                    ReplicaService::send_state_transfer(shared_data_clone, succ_addr_str).await
-                });
-            },
-            None => {
-                self.set_tail(true);
+            //Set is_tail
+            match succ_addr.clone() {
+                Some(addr) => self.set_tail(false),
+                None => self.set_tail(true),
             }
-        }
+
+            //Send a state transfer
+            let shared_data_clone = self.shared_data.clone();
+            let succ_addr_str = succ_addr.unwrap();
+
+            self.tokio_rt.spawn(async move {
+                ReplicaService::send_state_transfer(shared_data_clone, succ_addr_str).await
+            });
+        };
     }
 
     fn set_head(&mut self, is_head: bool) {
-        #[cfg(debug_assertions)]
-        {
-            let mut is_head_read = block_on(self.shared_data.is_head.read());
-            let is_head_curr = *is_head_read;
-            drop(is_head_read);
-
-            if is_head_curr != is_head {
-                println!("Setting head service status to: {}", is_head);
-            }
-        }
-
         let mut is_head_write = block_on(self.shared_data.is_head.write());
         *is_head_write = is_head;
         drop(is_head_write);
-
-        //If the replica is the head, then it doesn't need a state transfer
-        if is_head {
-            let mut new_tail_write = block_on(self.shared_data.new_tail.write());
-            *new_tail_write = false;
-            drop(new_tail_write);
-        }
     }
 
     fn set_tail(&mut self, is_tail: bool) {
-        #[cfg(debug_assertions)]
-        {
-            let mut is_tail_read = block_on(self.shared_data.is_tail.read());
-            let is_tail_curr = *is_tail_read;
-            drop(is_tail_read);
-
-            if is_tail_curr != is_tail {
-                println!("Setting tail service status to: {}", is_tail);
-            }
-        }
-
         let mut is_tail_write = block_on(self.shared_data.is_tail.write());
         *is_tail_write = is_tail;
         drop(is_tail_write);
