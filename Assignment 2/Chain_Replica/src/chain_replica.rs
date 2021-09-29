@@ -271,7 +271,7 @@ mod replica_manager {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //The port all services will run on
-    let server_port = "50051";
+    let mut server_port = "50051";
     //The name used in the znode data
     let name = "Alex Wolski";
 
@@ -281,10 +281,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let args: Vec<String> = env::args().collect();
 
-    if args.len() != 3
+    if args.len() < 3 && args.len() > 4
     {
-        println!("Correct Usage: chain_replica.rs ZOOKEEPER_HOST_PORT_LIST base_path");
+        println!("Correct Usage: chain_replica.rs ZOOKEEPER_HOST_PORT_LIST base_path [OPTIONAL] server_port");
         return Err(Error::new(ErrorKind::InvalidInput, "Invalid number of arguments").into());
+    }
+
+    if args.len() == 4 {
+        server_port = &args[3];
     }
 
     println!("");
