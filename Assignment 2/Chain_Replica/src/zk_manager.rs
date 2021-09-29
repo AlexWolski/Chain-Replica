@@ -2,10 +2,128 @@
 use std::io::{Error, ErrorKind};
 use zookeeper::{Acl, CreateMode, Watcher, WatchedEvent, ZooKeeper, ZkState, ZkError};
 
+//The delimiting character separating the address and name in the znode data
+static ZNODE_DELIM: &str = "\n";
+//The znode name prefix for all replicas
+static ZNODE_PREFIX: &str = "replica-";
+//The length of the sequence number ZooKeeper adds to znodes
+static SEQUENCE_LEN: u32 = 10;
+
 //Required for creating a connection, but not used
 struct NoopWatcher;
 impl Watcher for NoopWatcher {
     fn handle(&self, _event: WatchedEvent) {}
+}
+
+//Returns the sequence number of a replica znode
+pub fn get_replica_id(znode: &str) -> Result<u32, Box<dyn std::error::Error>> {
+    let mut znode_str = znode.to_string();
+
+    //Check that the znode is long enough to contain a sequence number
+    if znode_str.len() <= (SEQUENCE_LEN as usize) {
+        return Err(Error::new(ErrorKind::InvalidInput,
+            format!("The znode '{}' is missing a sequence number", znode_str)).into())
+    }
+
+    //Find the starting posiiton of the znode sequence
+    let split_point = znode_str.len() - (SEQUENCE_LEN as usize);
+    let id_string = znode_str.split_off(split_point);
+    let replica_id = id_string.parse::<u32>();
+
+    match replica_id {
+        Ok(id) => Ok(id),
+        _ => return Err(Error::new(ErrorKind::InvalidInput,
+            format!("znode sequence '{}' is formatted incorrectly", id_string)).into())
+    }
+}
+
+//Takes the a znode data string and returns the address
+pub fn parse_znode_addr(znode_data: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let mut znode_data_str = znode_data.to_string();
+    let result = znode_data_str.find(ZNODE_DELIM);
+
+    match result {
+        Some(position) => {
+            if position == 0 {
+                return Err(Error::new(ErrorKind::InvalidData,
+                    format!("znode data is missing an address")).into())
+            }
+        },
+        None => return Err(Error::new(ErrorKind::InvalidData,
+            format!("znode data '{}' is formatted incorrectly", znode_data)).into())
+    }
+
+    let delim_pos = result.unwrap();
+    //Split the address into znode_data_str 
+    let _ = znode_data_str.split_off(delim_pos);
+
+    Ok(znode_data_str)
+}
+
+//Takes a znode path and returns the address
+pub fn get_node_address(instance: &mut ZooKeeper, znode: &str) -> Result<String, Box<dyn std::error::Error>> {
+        let result = instance.get_data(znode, false);
+
+        match result {
+            Ok(node_data) => {
+                let data_str = String::from_utf8(node_data.0)?;
+                let address = parse_znode_addr(&data_str)?;
+
+                Ok(address)
+            }
+            _ => {
+                Err(Error::new(ErrorKind::InvalidData,
+                    format!("Failed to get the data of znode: {}", znode)).into())
+            }
+        }
+}
+
+//Creates the path to a new replica znode
+pub fn new_replica_path(base_path: &str) -> String {
+    return format!("{}/{}", base_path, ZNODE_PREFIX);
+}
+
+pub fn format_znode_data(server_addr: &str, name: &str) -> String {
+    return format!("{}{}{}", server_addr, ZNODE_DELIM, name);
+}
+
+pub fn get_neighbors(instance: &mut ZooKeeper, base_path: &str, replica_id: u32) -> Result<(Option<String>, Option<String>), Box<dyn std::error::Error>> {
+    //Get all children of the base node
+    let result = instance.get_children(&base_path, false);
+
+    //Handle a connection error
+    match result {
+        Ok(_) => (),
+        Err(_) => return Err(Error::new(ErrorKind::Other, format!("Failed to get children in znode: {}", &base_path)).into())
+    };
+
+    let replica_list = result.as_ref().unwrap();
+    let last_index = replica_list.len() - 1;
+    let mut replica_index = 0;
+
+    for replica in replica_list.iter() {
+        let curr_replica_id = get_replica_id(&replica)?;
+
+        if curr_replica_id == replica_id {
+            let mut head = None;
+            let mut tail = None;
+
+            //Set the predecessor and successor if they exit
+            if replica_index != 0 {
+                head = Some(replica_list[replica_index - 1].to_owned());
+            }
+            if replica_index != last_index {
+                tail = Some(replica_list[replica_index + 1].to_owned());
+            }
+
+            return Ok((head, tail));
+        }
+
+        replica_index += 1;
+    }
+
+    //There is an issue with the replica list
+    Err(Error::new(ErrorKind::InvalidData, format!("Invalid chain position: {}", replica_index)).into())
 }
 
 pub fn connect<Listener: Fn(ZkState) + Send + 'static>(host_list: &str, listener: Listener, timeout: u64)

@@ -11,17 +11,6 @@
 mod grpc_services;
 mod zk_manager;
 
-//Global Constants
-
-//The delimiting character separating the address and name in the znode data
-static ZNODE_DELIM: &str = "\n";
-//The znode name prefix for all replicas
-static ZNODE_PREFIX: &str = "replica-";
-//The length of the sequence number ZooKeeper adds to znodes
-static SEQUENCE_LEN: u32 = 10;
-//The duration in milliseconds between ZooKeeper updates
-static UPDATE_DELAY: u64 = 200;
-
 mod replica_manager {
     use super::*;
     use std::io::{Error, ErrorKind};
@@ -151,152 +140,6 @@ mod replica_manager {
             };
         }
 
-        //Returns the sequence number of a replica znode
-        fn get_replica_id(znode: &str) -> Result<u32, Box<dyn std::error::Error>> {
-            let mut znode_str = znode.to_string();
-
-            //Check that the znode is long enough to contain a sequence number
-            if znode_str.len() <= (SEQUENCE_LEN as usize) {
-                return Err(Error::new(ErrorKind::InvalidInput,
-                    format!("The znode '{}' is missing a sequence number", znode_str)).into())
-            }
-
-            //Find the starting posiiton of the znode sequence
-            let split_point = znode_str.len() - (SEQUENCE_LEN as usize);
-            let id_string = znode_str.split_off(split_point);
-            let replica_id = id_string.parse::<u32>();
-
-            match replica_id {
-                Ok(id) => Ok(id),
-                _ => return Err(Error::new(ErrorKind::InvalidInput,
-                    format!("znode sequence '{}' is formatted incorrectly", id_string)).into())
-            }
-        }
-
-        //Takes the a znode data string and returns the address
-        fn parse_znode_addr(znode_data: &str) -> Result<String, Box<dyn std::error::Error>> {
-            let mut znode_data_str = znode_data.to_string();
-            let result = znode_data_str.find(ZNODE_DELIM);
-
-            match result {
-                Some(position) => {
-                    if position == 0 {
-                        return Err(Error::new(ErrorKind::InvalidData,
-                            format!("znode data is missing an address")).into())
-                    }
-                },
-                None => return Err(Error::new(ErrorKind::InvalidData,
-                    format!("znode data '{}' is formatted incorrectly", znode_data)).into())
-            }
-
-            let delim_pos = result.unwrap();
-            //Split the address into znode_data_str 
-            let _ = znode_data_str.split_off(delim_pos);
-
-            Ok(znode_data_str)
-        }
-
-        // Takes a znode path and returns the address
-        fn get_node_address(&self, znode: &str) -> Result<String, Box<dyn std::error::Error>> {
-                let result = self.zk_instance.get_data(znode, false);
-
-                match result {
-                    Ok(node_data) => {
-                        let data_str = String::from_utf8(node_data.0)?;
-                        let address = Replica::parse_znode_addr(&data_str)?;
-
-                        Ok(address)
-                    }
-                    _ => {
-                        Err(Error::new(ErrorKind::InvalidData,
-                            format!("Failed to get the data of znode: {}", znode)).into())
-                    }
-                }
-        }
-
-        //Checks if this replica is the head, assuming ZooKeeper orders the znode list from newest to oldest
-        fn is_head(&self) -> Result<bool, Box<dyn std::error::Error>> {
-            //Get all children of the base node
-            let result = self.zk_instance.get_children(&self.base_path, false);
-
-            //Handle a connection error
-            match result {
-                Ok(_) => (),
-                Err(_) => return Err(Error::new(ErrorKind::Other, format!("Failed to get children in znode: {}", &self.base_path)).into())
-            };
-
-            let replica_list = result.as_ref().unwrap();
-            let first_replica_id = Replica::get_replica_id(&replica_list[0])?;
-
-            if first_replica_id == self.replica_id {
-                Ok(true)
-            }
-            else {
-                Ok(false)
-            }
-        }
-                //Checks if this replica is the tail, assuming ZooKeeper orders the znode list from newest to oldest
-        fn is_tail(&self) -> Result<bool, Box<dyn std::error::Error>> {
-            //Get all children of the base node
-            let result = self.zk_instance.get_children(&self.base_path, false);
-
-            //Handle a connection error
-            match result {
-                Ok(_) => (),
-                Err(_) => return Err(Error::new(ErrorKind::Other, format!("Failed to get children in znode: {}", &self.base_path)).into())
-            };
-
-            let replica_list = result.as_ref().unwrap();
-            let last_index = replica_list.len() - 1;
-            let last_replica_id = Replica::get_replica_id(&replica_list[last_index])?;
-
-            if last_replica_id == self.replica_id {
-                Ok(true)
-            }
-            else {
-                Ok(false)
-            }
-        }
-
-        fn get_neighbors(&self) -> Result<(Option<String>, Option<String>), Box<dyn std::error::Error>> {
-            //Get all children of the base node
-            let result = self.zk_instance.get_children(&self.base_path, false);
-
-            //Handle a connection error
-            match result {
-                Ok(_) => (),
-                Err(_) => return Err(Error::new(ErrorKind::Other, format!("Failed to get children in znode: {}", &self.base_path)).into())
-            };
-
-            let replica_list = result.as_ref().unwrap();
-            let last_index = replica_list.len() - 1;
-            let mut replica_index = 0;
-
-            for replica in replica_list.iter() {
-                let curr_replica_id = Replica::get_replica_id(&replica)?;
-
-                if curr_replica_id == self.replica_id {
-                    let mut head = None;
-                    let mut tail = None;
-
-                    //Set the predecessor and successor if they exit
-                    if replica_index != 0 {
-                        head = Some(replica_list[replica_index - 1].to_owned());
-                    }
-                    if replica_index != last_index {
-                        tail = Some(replica_list[replica_index + 1].to_owned());
-                    }
-
-                    return Ok((head, tail));
-                }
-
-                replica_index += 1;
-            }
-
-            //There is an issue with the replica list
-            Err(Error::new(ErrorKind::InvalidData, format!("Invalid chain position: {}", replica_index)).into())
-        }
-
 
         pub fn new(host_list: &str, base_path: &str, server_port: &str, name: &str)
         -> Result<Replica, Box<dyn std::error::Error>> {
@@ -306,9 +149,9 @@ mod replica_manager {
             let socket = server_addr.parse()?;
 
             //Construct the replica znode path (before the sequence number is added)
-            let znode_path = format!("{}/{}", base_path, ZNODE_PREFIX);
+            let znode_path = zk_manager::new_replica_path(base_path);
             //Construct the contents of the znode
-            let znode_data = format!("{}{}{}", server_addr, ZNODE_DELIM, name);
+            let znode_data = zk_manager::format_znode_data(&server_addr, name);
 
             //Connect to the ZooKeeper host
             let mut instance = zk_manager::connect(host_list, Replica::print_conn_state, 5)?;
@@ -327,7 +170,7 @@ mod replica_manager {
                 zk_instance: instance,
                 socket: socket,
                 base_path: base_path.to_string(),
-                replica_id: Replica::get_replica_id(&znode)?,
+                replica_id: zk_manager::get_replica_id(&znode)?,
                 //Data shared by all services
                 shared_data: shared_data.clone(),
                 //Instantiate Servers
@@ -336,7 +179,7 @@ mod replica_manager {
         }
 
         pub fn start(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-            let (pred_znode, succ_znode) = self.get_neighbors()?;
+            let (pred_znode, succ_znode) = zk_manager::get_neighbors(&mut self.zk_instance, &self.base_path, self.replica_id)?;
 
             self.server.start(self.socket.clone(), pred_znode, succ_znode);
             Ok(())
@@ -349,13 +192,13 @@ mod replica_manager {
 
         //Check for changes in ZooKeeper
         pub fn update(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-            let (pred_znode, succ_znode) = self.get_neighbors()?;
+            let (pred_znode, succ_znode) = zk_manager::get_neighbors(&mut self.zk_instance, &self.base_path, self.replica_id)?;
 
             let pred_addr = match pred_znode {
                 Some(znode) => {
                     let znode_full = format!("{}/{}", self.base_path, znode);
 
-                    match self.get_node_address(&znode_full) {
+                    match zk_manager::get_node_address(&mut self.zk_instance, &znode_full) {
                         Ok(addr) => Some(addr),
                         Err(err) => return Err(err)
                     }
@@ -367,7 +210,7 @@ mod replica_manager {
                 Some(znode) => {
                     let znode_full = format!("{}/{}", self.base_path, znode);
 
-                    match self.get_node_address(&znode_full) {
+                    match zk_manager::get_node_address(&mut self.zk_instance, &znode_full) {
                         Ok(addr) => Some(addr),
                         Err(err) => return Err(err)
                     }
@@ -393,8 +236,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     use std::env;
     use std::io::{Error, ErrorKind};
-    //use tokio::signal;
-    use tokio::time::{sleep, Duration};
+    use tokio::signal;
 
     let args: Vec<String> = env::args().collect();
 
@@ -409,20 +251,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     replica.start()?;
     println!("");
 
-    //Rust ZooKeeper watches only trigger once, so monitoring needs to be performed in a loop
-    loop {
-        replica.update()?;
-        sleep(Duration::from_millis(UPDATE_DELAY)).await;
-    }
-
     // To-do: Make graceful shutdown compatible with ZooKeeper
-    // match signal::ctrl_c().await {
-    //     Ok(()) => {
-    //         replica.stop()?;
-    //         println!("Shutting replica down\n");
-    //         Ok(())
-    //     },
+    match signal::ctrl_c().await {
+        Ok(()) => {
+            replica.stop()?;
+            println!("Shutting replica down\n");
+            Ok(())
+        },
 
-    //     Err(_) => { Err(Error::new(ErrorKind::Other, "Failed to listen for a shutdown signal").into()) },
-    // }
+        Err(_) => { Err(Error::new(ErrorKind::Other, "Failed to listen for a shutdown signal").into()) },
+    }
 }
