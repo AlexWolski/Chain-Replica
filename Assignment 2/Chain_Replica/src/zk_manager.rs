@@ -1,5 +1,6 @@
 //Libraries
 use std::io::{Error, ErrorKind};
+use std::sync::{Arc, RwLock};
 use zookeeper::{Acl, CreateMode, Watcher, WatchedEvent, ZooKeeper, ZkState, ZkError};
 
 //The delimiting character separating the address and name in the znode data
@@ -61,21 +62,23 @@ pub fn parse_znode_addr(znode_data: &str) -> Result<String, Box<dyn std::error::
 }
 
 //Takes a znode path and returns the address
-pub fn get_node_address(instance: &mut ZooKeeper, znode: &str) -> Result<String, Box<dyn std::error::Error>> {
-        let result = instance.get_data(znode, false);
+pub fn get_node_address(instance: Arc<RwLock<ZooKeeper>>, znode: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let instance_read = instance.read().unwrap();
+    let result = instance_read.get_data(znode, false);
+    drop(instance_read);
 
-        match result {
-            Ok(node_data) => {
-                let data_str = String::from_utf8(node_data.0)?;
-                let address = parse_znode_addr(&data_str)?;
+    match result {
+        Ok(node_data) => {
+            let data_str = String::from_utf8(node_data.0)?;
+            let address = parse_znode_addr(&data_str)?;
 
-                Ok(address)
-            }
-            _ => {
-                Err(Error::new(ErrorKind::InvalidData,
-                    format!("Failed to get the data of znode: {}", znode)).into())
-            }
+            Ok(address)
         }
+        _ => {
+            Err(Error::new(ErrorKind::InvalidData,
+                format!("Failed to get the data of znode: {}", znode)).into())
+        }
+    }
 }
 
 //Creates the path to a new replica znode
@@ -87,9 +90,11 @@ pub fn format_znode_data(server_addr: &str, name: &str) -> String {
     return format!("{}{}{}", server_addr, ZNODE_DELIM, name);
 }
 
-pub fn get_neighbors(instance: &mut ZooKeeper, base_path: &str, replica_id: u32) -> Result<(Option<String>, Option<String>), Box<dyn std::error::Error>> {
+pub fn get_neighbors(instance: Arc<RwLock<ZooKeeper>>, base_path: &str, replica_id: u32) -> Result<(Option<String>, Option<String>), Box<dyn std::error::Error>> {
     //Get all children of the base node
-    let result = instance.get_children(&base_path, false);
+    let instance_read = instance.read().unwrap();
+    let result = instance_read.get_children(&base_path, false);
+    drop(instance_read);
 
     //Handle a connection error
     match result {
@@ -149,7 +154,7 @@ pub fn connect<Listener: Fn(ZkState) + Send + 'static>(host_list: &str, listener
 
 
 //Recursively create the znodes in the path, using the same settings for each znode
-pub fn create_recursive(instance: &mut ZooKeeper, znode_path: &str, znode_data: &str, create_mode: CreateMode)
+pub fn create_recursive(instance: Arc<RwLock<ZooKeeper>>, znode_path: &str, znode_data: &str, create_mode: CreateMode)
 -> Result<String, Box<dyn std::error::Error>> {
     //Check that the creation mode is valid
     match create_mode {
@@ -163,10 +168,12 @@ pub fn create_recursive(instance: &mut ZooKeeper, znode_path: &str, znode_data: 
     let mut curr_path = String::new();
     let first_znode = format!("/{}", path_split.next().unwrap());
 
+    let instance_read = instance.read().unwrap();
+
     //Create the first znode, if it doesn't exist
-    match instance.exists(&first_znode, false) {
+    match instance_read.exists(&first_znode, false) {
         Ok(Some(_)) => curr_path = first_znode,
-        Ok(None) => curr_path = create(instance, &first_znode, znode_data, create_mode)?,
+        Ok(None) => curr_path = create(instance.clone(), &first_znode, znode_data, create_mode)?,
         Err(_) => return Err(Error::new(ErrorKind::InvalidInput,
             format!("Unable to create the znode: {}", curr_path)).into())
     }
@@ -177,14 +184,14 @@ pub fn create_recursive(instance: &mut ZooKeeper, znode_path: &str, znode_data: 
         curr_path = format!("{}/{}", curr_path, znode);
 
         //Create the znode if it doesn't exist
-        match instance.exists(&curr_path, false) {
+        match instance_read.exists(&curr_path, false) {
             Ok(Some(_)) => {},
-            Ok(None) => curr_path = create(instance, &curr_path, znode_data, create_mode)?,
+            Ok(None) => curr_path = create(instance.clone(), &curr_path, znode_data, create_mode)?,
             Err(_) => return Err(Error::new(ErrorKind::InvalidInput,
                 format!("Unable to create the znode: {}", curr_path)).into()),
         };
 
-        match instance.exists(&curr_path, false) {
+        match instance_read.exists(&curr_path, false) {
             Ok(Some(_)) => println!("{} exists", curr_path),
             Ok(None) => println!("{} exists", curr_path),
             Err(_) => println!("WTF bro"),
@@ -195,12 +202,16 @@ pub fn create_recursive(instance: &mut ZooKeeper, znode_path: &str, znode_data: 
 }
 
 //Create a single znode at an existing path
-pub fn create(instance: &mut ZooKeeper, znode_path: &str, znode_data: &str, create_mode: CreateMode)
+pub fn create(instance: Arc<RwLock<ZooKeeper>>, znode_path: &str, znode_data: &str, create_mode: CreateMode)
 -> Result<String, Box<dyn std::error::Error>> {
-    let create_result = instance.create(znode_path,
+    let mut instance_write = instance.write().unwrap();
+
+    let create_result = instance_write.create(znode_path,
         znode_data.as_bytes().to_vec(),
         Acl::open_unsafe().clone(),
         create_mode);
+
+    drop(instance_write);
 
     //Handle a creation error
     match create_result {

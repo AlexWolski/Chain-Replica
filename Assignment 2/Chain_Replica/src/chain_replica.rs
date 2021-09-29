@@ -16,19 +16,20 @@ mod replica_manager {
     use std::io::{Error, ErrorKind};
     use std::ops::Range;
     use std::net::{SocketAddr};
-    use async_std::sync::Arc;
+    use std::sync::{Arc, RwLock};
+    use std::ops::Deref;
     use local_ip_address::{local_ip, list_afinet_netifas};
     use zookeeper::{CreateMode, ZooKeeper, ZkState};
     use grpc_services::{ReplicaData, ServerManager};
 
 
     pub struct Replica {
-        zk_instance: ZooKeeper,
         socket: SocketAddr,
         base_path: String,
         replica_id: u32,
         shared_data: Arc<ReplicaData>,
-        server: ServerManager,
+        zk_instance: Arc<RwLock<ZooKeeper>>,
+        server: Arc<RwLock<Option<ServerManager>>>,
     }
 
     impl Replica {
@@ -154,51 +155,63 @@ mod replica_manager {
             let znode_data = zk_manager::format_znode_data(&server_addr, name);
 
             //Connect to the ZooKeeper host
-            let mut instance = zk_manager::connect(host_list, Replica::print_conn_state, 5)?;
+            let mut instance = Arc::new(RwLock::new(zk_manager::connect(host_list, Replica::print_conn_state, 5)?));
             //Recursively create the znodes in the base path
-            let _ = zk_manager::create_recursive(&mut instance, base_path, "", CreateMode::Persistent)?;
+            let _ = zk_manager::create_recursive(instance.clone(), base_path, "", CreateMode::Persistent)?;
             //Create the znode for this replica
-            let znode = zk_manager::create(&mut instance, &znode_path, &znode_data, CreateMode::EphemeralSequential)?;
+            let znode = zk_manager::create(instance.clone(), &znode_path, &znode_data, CreateMode::EphemeralSequential)?;
             println!("Successfully created zNode: {}", znode);
             println!("Listening on: {}", server_addr);
 
             //Create the shared data for the servers
             let shared_data = Arc::new(ReplicaData::new(server_addr));
+            //Instantiate the server
+            let server = Arc::new(RwLock::new(Some(ServerManager::new(shared_data.clone()))));
 
             Ok(Replica {
-                //ZooKeeper data
-                zk_instance: instance,
                 socket: socket,
                 base_path: base_path.to_string(),
                 replica_id: zk_manager::get_replica_id(&znode)?,
                 //Data shared by all services
                 shared_data: shared_data.clone(),
+                //ZooKeeper data
+                zk_instance: instance.clone(),
                 //Instantiate Servers
-                server: ServerManager::new(shared_data.clone()),
+                server: server.clone(),
             })
         }
 
         pub fn start(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-            let (pred_znode, succ_znode) = zk_manager::get_neighbors(&mut self.zk_instance, &self.base_path, self.replica_id)?;
+            let (pred_znode, succ_znode) = zk_manager::get_neighbors(self.zk_instance.clone(), &self.base_path, self.replica_id)?;
 
-            self.server.start(self.socket.clone(), pred_znode, succ_znode);
+            let mut server_write = self.server.write().unwrap();
+            let mut server_instance = server_write.as_mut().unwrap();
+            server_instance.start(self.socket.clone(), pred_znode, succ_znode);
+
             Ok(())
         }
 
         pub fn stop(self) -> Result<(), Box<dyn std::error::Error>> {
-            self.server.stop();
+            //Get ownership of the server
+            let mut server_write = self.server.write().unwrap();
+            let server_instance = server_write.take().unwrap();
+            //Call its destructor
+            server_instance.stop();
+
             Ok(())
         }
 
         //Check for changes in ZooKeeper
-        pub fn update(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-            let (pred_znode, succ_znode) = zk_manager::get_neighbors(&mut self.zk_instance, &self.base_path, self.replica_id)?;
+        pub fn update(server: Arc<RwLock<Option<ServerManager>>>, instance: Arc<RwLock<ZooKeeper>>, base_path: &str, replica_id: u32) ->
+        Result<(), Box<dyn std::error::Error>> {
+            let (pred_znode, succ_znode) = zk_manager::get_neighbors(instance.clone(), &base_path, replica_id)?;
 
+            //Predecessor
             let pred_addr = match pred_znode {
                 Some(znode) => {
-                    let znode_full = format!("{}/{}", self.base_path, znode);
+                    let znode_full = format!("{}/{}", base_path, znode);
 
-                    match zk_manager::get_node_address(&mut self.zk_instance, &znode_full) {
+                    match zk_manager::get_node_address(instance.clone(), &znode_full) {
                         Ok(addr) => Some(addr),
                         Err(err) => return Err(err)
                     }
@@ -206,11 +219,12 @@ mod replica_manager {
                 None => None,
             };
 
+            //Successor
             let succ_addr = match succ_znode {
                 Some(znode) => {
-                    let znode_full = format!("{}/{}", self.base_path, znode);
+                    let znode_full = format!("{}/{}", base_path, znode);
 
-                    match zk_manager::get_node_address(&mut self.zk_instance, &znode_full) {
+                    match zk_manager::get_node_address(instance.clone(), &znode_full) {
                         Ok(addr) => Some(addr),
                         Err(err) => return Err(err)
                     }
@@ -218,8 +232,10 @@ mod replica_manager {
                 None => None,
             };
             
-            self.server.set_pred(pred_addr);
-            self.server.set_succ(succ_addr);
+            let mut server_write = server.write().unwrap();
+            let mut server_instance = server_write.as_mut().unwrap();
+            server_instance.set_pred(pred_addr);
+            server_instance.set_succ(succ_addr);
 
             Ok(())
         }
