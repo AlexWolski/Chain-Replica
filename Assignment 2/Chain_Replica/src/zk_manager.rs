@@ -202,10 +202,14 @@ pub fn create_recursive(instance: Arc<RwLock<ZooKeeper>>, znode_path: &str, znod
     let mut curr_path = String::new();
     let first_znode = format!("/{}", path_split.next().unwrap());
 
-    let instance_read = instance.read().unwrap();
+    //Check if the first znode exists
+    let mut instance_read = instance.read().unwrap();
+    let mut exists_result = instance_read.exists(&first_znode, false);
+    //Drop the read guard so that a new node can be created
+    drop(instance_read);
 
     //Create the first znode, if it doesn't exist
-    match instance_read.exists(&first_znode, false) {
+    match exists_result {
         Ok(Some(_)) => curr_path = first_znode,
         Ok(None) => curr_path = create(instance.clone(), &first_znode, znode_data, create_mode)?,
         Err(_) => return Err(Error::new(ErrorKind::InvalidInput,
@@ -214,22 +218,21 @@ pub fn create_recursive(instance: Arc<RwLock<ZooKeeper>>, znode_path: &str, znod
 
     //Iteratively create the remaining znodes
     for znode in path_split {
+        //Check if the current znode exists
+        instance_read = instance.read().unwrap();
+        exists_result = instance_read.exists(&curr_path, false);
+        drop(instance_read);
+
         //Construct the path for the next znode
         curr_path = format!("{}/{}", curr_path, znode);
 
         //Create the znode if it doesn't exist
-        match instance_read.exists(&curr_path, false) {
+        match exists_result {
             Ok(Some(_)) => {},
             Ok(None) => curr_path = create(instance.clone(), &curr_path, znode_data, create_mode)?,
             Err(_) => return Err(Error::new(ErrorKind::InvalidInput,
                 format!("Unable to create the znode: {}", curr_path)).into()),
         };
-
-        match instance_read.exists(&curr_path, false) {
-            Ok(Some(_)) => println!("{} exists", curr_path),
-            Ok(None) => println!("{} exists", curr_path),
-            Err(_) => println!("WTF bro"),
-        }
     }
 
     Ok(curr_path)
