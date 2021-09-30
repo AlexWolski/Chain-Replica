@@ -483,6 +483,9 @@ impl Replica for ReplicaService {
 
             //If this replica is the tail, send an ack to the predecessor
             if is_tail {
+                #[cfg(debug_assertions)]
+                println!("Sending AckRequest (xID: {}) towards head from tail", request_ref.xid);
+
                 let ack_request = Request::<chain::AckRequest>::new(chain::AckRequest { xid: request_ref.xid });
 
                 self.tokio_rt.spawn(async move {
@@ -628,8 +631,9 @@ impl Replica for ReplicaService {
 
     async fn ack(&self, request: Request<AckRequest>) ->
     Result<Response<AckResponse>, Status> {
-        #[cfg(debug_assertions)]
         let ack_xid = request.get_ref().xid;
+
+        #[cfg(debug_assertions)]
         println!("Received AckRequest (xID: {})", ack_xid);
 
         //Ensure that ACKs are processed in sequential order
@@ -674,6 +678,9 @@ impl Replica for ReplicaService {
         }
 
         let shared_data_clone = self.shared_data.clone();
+
+        #[cfg(debug_assertions)]
+        println!("Forwarding AckRequest (xID: {}) to predecessor", ack_xid);
 
         //Forward the ack to the predecessor
         self.tokio_rt.spawn(async move {
