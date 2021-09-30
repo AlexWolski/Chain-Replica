@@ -246,12 +246,19 @@ impl ReplicaService {
                     match transfer_result {
                         Ok(response) => {
                             match response.get_ref().rc {
-                                //State successfully transfered or  is no longer needed
-                                0 | 1 => return,
-                                //Invalid status code
+                                0 => {
+                                    #[cfg(debug_assertions)]
+                                    println!("Successfully transfered state to successor at address: {}", succ_addr);
+                                    return
+                                },
+                                1 => {
+                                    #[cfg(debug_assertions)]
+                                    println!("Successor at address: {} does not need a state transfer", succ_addr);
+                                    return
+                                },
                                 rc => {
                                     #[cfg(debug_assertions)]
-                                    println!("Successor returned StateTransferRequest with invalid code: '{}'. Retrying...", rc);
+                                    println!("Successor returned StateTransferResponse with invalid code: '{}'. Retrying...", rc);
                                     sleep(Duration::from_millis(RETRY_WAIT)).await;
                                 }
                             }
@@ -259,7 +266,7 @@ impl ReplicaService {
                         //If the request could not be sent, retry
                         Err(_) => {
                             #[cfg(debug_assertions)]
-                            println!("Failed to send a StateTransferRequest to the successor at address: '{}'. Retrying...", succ_addr);
+                            println!("Failed to send a StateTransferResponse to the successor at address: '{}'. Retrying...", succ_addr);
                             sleep(Duration::from_millis(RETRY_WAIT)).await;
                         },
                     }
@@ -308,9 +315,16 @@ impl ReplicaService {
                         Ok(response) => {
                             match response.get_ref().rc {
                                 //Update successfully reached the successor
-                                0 => return,
+                                0 => {
+                                    #[cfg(debug_assertions)]
+                                    println!("Successfully forwarded update to successor at address: {}", succ_addr);
+                                    return
+                                },
                                 //State transfer requested. The successor has changed.
                                 1 => {
+                                    #[cfg(debug_assertions)]
+                                    println!("State transfer request received from successor at address: {}", succ_addr);
+
                                     //Sent the state transfer and stop trying to send the update
                                     tokio::spawn(async move {
                                         ReplicaService::send_state_transfer(shared_data, succ_addr).await
@@ -731,6 +745,9 @@ impl ServerManager {
             let succ_addr_str = succ_addr.unwrap();
 
             self.tokio_rt.spawn(async move {
+                #[cfg(debug_assertions)]
+                println!("Transfering state to new successor at address: {}", succ_addr_str);
+
                 ReplicaService::send_state_transfer(shared_data_clone, succ_addr_str).await
             });
         };
