@@ -512,7 +512,7 @@ impl Replica for ReplicaService {
         let request_ref = request.get_ref();
 
         #[cfg(debug_assertions)]
-        println!("Received StateTransferRequest ( xID: {} )", request_ref.xid);
+        println!("\nReceived StateTransferRequest (xID: {})", request_ref.xid);
 
         let mut new_tail_read = self.shared_data.new_tail.read().await;
         let new_tail = *new_tail_read;
@@ -523,6 +523,9 @@ impl Replica for ReplicaService {
 
         //If this is an empty replica, copy all of the data
         if new_tail {
+            #[cfg(debug_assertions)]
+            println!("Copying state as new tail...");
+
             //Copy all of the replica data
             //Since this is a tail replica, don't copy the sent list
             //To-Do: Only send and copy the needed portions
@@ -533,23 +536,56 @@ impl Replica for ReplicaService {
             let mut new_tail_write = self.shared_data.new_tail.write().await;
             *new_tail_write = false;
             drop(new_tail_write);
+
+            //Print out the transfered state
+            #[cfg(debug_assertions)]
+            {
+                println!("Contents of database:");
+
+                for (key, value) in request_ref.state.iter() {
+                    println!("{}: {}", key, value);
+                }
+            }
         }
         //If this is not an empty replica, apply the new updates
         else {
+            #[cfg(debug_assertions)]
+            println!("Applying state updates as existing replica...");
+
             let curr_xid = *xid_write;
             let uri = format!("https://{}", self.shared_data.my_addr);
             let sent_list = request_ref.sent.to_owned();
 
+            #[cfg(debug_assertions)]
+            println!("New updates:");
+            let mut num_updates = 0;
+
+            //Apply any new updates
             for update_request in sent_list {
                 if update_request.xid > curr_xid {
                     let mut replica_client = ReplicaClient::connect(uri.clone()).await.unwrap();
+
+                    #[cfg(debug_assertions)]
+                    println!("{}: {} (xID = {})", update_request.key, update_request.new_value, update_request.xid);
 
                     //The update threads won't complete until the locks are released
                     self.tokio_rt.spawn(async move {
                         let _ = replica_client.update(update_request).await;
                     });
+
+                    num_updates += 1;
                 } 
             }
+
+            #[cfg(debug_assertions)]
+            if num_updates == 0 {
+                println!("None");
+            }
+
+
+            #[cfg(debug_assertions)]
+            println!("\nForwarding ACKs:");
+            let mut num_acks = 0;
 
             //If the predecessor is missing any ACKs, forward them
             let mut missing_xid = request_ref.xid;
@@ -558,13 +594,25 @@ impl Replica for ReplicaService {
                 let shared_data_clone = self.shared_data.clone();
                 let ack_request = Request::<chain::AckRequest>::new(chain::AckRequest { xid: missing_xid });
 
+                #[cfg(debug_assertions)]
+                println!("xID: {}", missing_xid);
+
                 self.tokio_rt.spawn(async move {
                     ReplicaService::send_ack(shared_data_clone, ack_request).await
                 });
 
                 missing_xid += 1;
+                num_acks += 1;
+            }
+
+            #[cfg(debug_assertions)]
+            if num_acks == 0 {
+                println!("None");
             }
         }
+
+        #[cfg(debug_assertions)]
+        println!("");
 
         drop(xid_write);
         drop(data_write);
@@ -577,7 +625,7 @@ impl Replica for ReplicaService {
     Result<Response<AckResponse>, Status> {
         #[cfg(debug_assertions)]
         let ack_xid = request.get_ref().xid;
-        println!("Received AckRequest ( xID: {} )", ack_xid);
+        println!("Received AckRequest (xID: {})", ack_xid);
 
         //Ensure that ACKs are processed in sequential order
         loop {
