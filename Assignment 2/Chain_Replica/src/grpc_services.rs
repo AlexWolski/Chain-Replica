@@ -6,7 +6,7 @@ pub mod chain {
 //Libraries
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use async_std::sync::{Arc, RwLock};
+use async_std::sync::{Arc, RwLock, Mutex};
 use tonic::{transport::Server, Request, Response, Status, Code};
 use tokio::runtime::Handle;
 use tokio::time::{sleep, Duration};
@@ -43,6 +43,7 @@ pub struct ReplicaData {
     pub is_head: Arc<RwLock<bool>>,
     pub is_tail: Arc<RwLock<bool>>,
     pub new_tail: Arc<RwLock<bool>>,
+    pub inc_lock: Arc<Mutex<()>>,
     pub ack_event: broadcast::Sender<u32>,
 }
 
@@ -60,6 +61,7 @@ impl ReplicaData {
             is_head: Arc::new(RwLock::new(true)),
             is_tail: Arc::new(RwLock::new(true)),
             new_tail: Arc::new(RwLock::new(false)),
+            inc_lock: Arc::new(Mutex::new(())),
             ack_event: broadcast::channel(1).0,
         }
     }
@@ -87,12 +89,15 @@ impl HeadChainReplica for HeadChainReplicaService {
             Ok(Response::new(head_response))
         }
         else {
+            //Aquire the inc_lock to prevent dataraces
+            let _inc_lock = self.shared_data.inc_lock.lock().await;
+
             let reqeust_ref = request.get_ref();
 
             #[cfg(debug_assertions)]
-            println!("Received IncRequest ( Key: '{}', Value: {} )", reqeust_ref.key, reqeust_ref.inc_value);
+            println!("Received IncRequest (Key: '{}', Value: {})", reqeust_ref.key, reqeust_ref.inc_value);
 
-            //Get the logical clock
+            //Get and lock the logical clock
             let xid_read = self.shared_data.xid.read().await;
             let curr_xid = *xid_read;
             let new_xid = curr_xid + 1;
@@ -172,7 +177,7 @@ impl TailChainReplica for TailChainReplicaService {
             let key = &request.get_ref().key;
 
             #[cfg(debug_assertions)]
-            println!("Received GetRequest ( Key: '{}' )", key);
+            println!("Received GetRequest (Key: '{}')", key);
 
             let data_read = self.shared_data.database.read().await;
 
@@ -435,7 +440,7 @@ impl Replica for ReplicaService {
         else {
             let request_ref = request.get_ref();
             #[cfg(debug_assertions)]
-            println!("Received UpdateRequest ( Key: '{}', newValue: {}, xID: {} )",
+            println!("Received UpdateRequest (Key: '{}', newValue: {}, xID: {})",
                 request_ref.key, request_ref.new_value, request_ref.xid);
 
             //Get the logical clock
