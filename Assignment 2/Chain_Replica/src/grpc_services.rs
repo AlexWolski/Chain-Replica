@@ -371,6 +371,9 @@ impl ReplicaService {
 
             //If this replica is the head, broadcast an ack event
             if is_head {
+                #[cfg(debug_assertions)]
+                println!("Sending IncResponse to client");
+
                 shared_data.ack_event.send(request_ref.xid).unwrap();
                 return
             }
@@ -380,6 +383,9 @@ impl ReplicaService {
                 let pred_addr_read = shared_data.pred_addr.read().await;
                 let pred_addr = (*pred_addr_read).as_ref().unwrap().clone();
                 drop(pred_addr_read);
+
+                #[cfg(debug_assertions)]
+                println!("Forwarding AckRequest (xID: {}) to predecessor at address: {}", request_ref.xid, pred_addr);
 
                 //Connect to the predecessor replica service
                 let uri = format!("https://{}", pred_addr);
@@ -678,9 +684,6 @@ impl Replica for ReplicaService {
         }
 
         let shared_data_clone = self.shared_data.clone();
-
-        #[cfg(debug_assertions)]
-        println!("Forwarding AckRequest (xID: {}) to predecessor", ack_xid);
 
         //Forward the ack to the predecessor
         self.tokio_rt.spawn(async move {
