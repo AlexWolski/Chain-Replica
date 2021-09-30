@@ -487,15 +487,21 @@ impl Replica for ReplicaService {
 
             let shared_data_clone = self.shared_data.clone();
 
-            //If this replica is the tail, send an ack to the predecessor
+            //If this replica is the tail, send an ack to the local replica
             if is_tail {
                 #[cfg(debug_assertions)]
-                println!("Sending AckRequest (xID: {}) towards head from tail", request_ref.xid);
+                println!("Sending AckRequest (xID: {}) to local tail replica", request_ref.xid);
 
                 let ack_request = Request::<chain::AckRequest>::new(chain::AckRequest { xid: request_ref.xid });
 
+                //Connect to the local replica service
+                let uri = format!("https://{}", self.shared_data.my_addr);
+                let mut replica_client = ReplicaClient::connect(uri).await.unwrap();
+
+                //Send the AckRequest
+                //No need to check for errors since its the local replica service
                 self.tokio_rt.spawn(async move {
-                    ReplicaService::send_ack(shared_data_clone, ack_request).await
+                    let _ = replica_client.ack(ack_request).await;
                 });
             }
             //If there is a successor, forward the update
