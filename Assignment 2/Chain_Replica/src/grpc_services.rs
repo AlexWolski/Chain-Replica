@@ -736,20 +736,20 @@ impl ServerManager {
 
             //Set is_tail
             match succ_addr.clone() {
-                Some(addr) => self.set_tail(false),
+                Some(addr) => {
+                    self.set_tail(false);
+
+                    //Send a state transfer
+                    #[cfg(debug_assertions)]
+                    println!("Transfering state to new successor at address: {}", addr);
+                    let shared_data_clone = self.shared_data.clone();
+
+                    self.tokio_rt.spawn(async move {
+                        ReplicaService::send_state_transfer(shared_data_clone, addr).await
+                    });
+                },
                 None => self.set_tail(true),
             }
-
-            //Send a state transfer
-            let shared_data_clone = self.shared_data.clone();
-            let succ_addr_str = succ_addr.unwrap();
-
-            self.tokio_rt.spawn(async move {
-                #[cfg(debug_assertions)]
-                println!("Transfering state to new successor at address: {}", succ_addr_str);
-
-                ReplicaService::send_state_transfer(shared_data_clone, succ_addr_str).await
-            });
         };
     }
 
