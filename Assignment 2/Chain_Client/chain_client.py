@@ -3,6 +3,7 @@
 import click
 import kazoo.client
 from colorama import (Fore,Style)
+import threading
 import time
 import grpc
 
@@ -57,7 +58,7 @@ def get(key):
 @click.argument('key')
 @click.argument('increment', type=click.INT)
 def inc(key, increment):
-    '''increment the value of KEY'''
+    '''get the value of KEY'''
     head = get_head_tail(ishead=True)
     reply = head.increment(chain_pb2.IncRequest(key=key, incValue=increment))
     print(f"rc={reply.rc}: {key} incremented by {increment}")
@@ -133,6 +134,50 @@ def debug(znode, log_limit, show_data):
                 click.echo(log)
         except kazoo.exceptions.NoNodeError:
             click.echo(f"{Fore.RED}{full_name} does not exist{Style.RESET_ALL}")
+
+@chain_client.command()
+@click.argument("key")
+@click.argument("blast_count", default=3)
+def test_chain(key, blast_count):
+    '''test a chain by:\n
+       \b
+       1) get the specified key
+       2) start BLAST_COUNT threads to increment the key
+       3) get the key again
+       4) wait for the increments to complete
+       5) get the key again
+    '''
+    tail = get_head_tail(ishead=False)
+    reply = tail.get(chain_pb2.GetRequest(key=key))
+    print(f"rc={reply.rc}: {key} is {reply.value}")
+    if reply.rc:
+        return
+
+    def inc_thread(increment):
+        head = get_head_tail(ishead=True)
+        reply = head.increment(chain_pb2.IncRequest(key=key, incValue=increment))
+        print(f"increment {key} by {increment} rc={reply.rc}")
+
+    threads = []
+    for i in range(blast_count):
+        t = threading.Thread(target=inc_thread, args=(i+3,))
+        t.start()
+        threads.append(t)
+
+    print(f"started {blast_count} inc threads")
+
+    reply = tail.get(chain_pb2.GetRequest(key=key))
+    print(f"rc={reply.rc}: {key} is {reply.value}")
+    if reply.rc:
+        return
+
+    for t in threads:
+        t.join()
+
+    print("threads are finished")
+
+    reply = tail.get(chain_pb2.GetRequest(key=key))
+    print(f"rc={reply.rc}: {key} is {reply.value}")
 
 
 if __name__ == '__main__':
