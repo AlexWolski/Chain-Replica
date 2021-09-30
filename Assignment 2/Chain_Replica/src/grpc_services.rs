@@ -35,7 +35,7 @@ static VAR_WAIT: u64 = 100;
 pub struct ReplicaData {
     pub database: Arc<RwLock<HashMap<String, u32>>>,
     pub xid: Arc<RwLock<u32>>,
-    pub last_ack: Arc<RwLock<u32>>,
+    pub last_ack: Arc<RwLock<Option<u32>>>,
     pub sent: Arc<RwLock<Vec<UpdateRequest>>>,
     pub my_addr: String,
     pub pred_addr: Arc<RwLock<Option<String>>>,
@@ -51,7 +51,7 @@ impl ReplicaData {
         ReplicaData{
             database: Arc::new(RwLock::new(HashMap::<String, u32>::new())),
             xid: Arc::new(RwLock::new(0)),
-            last_ack: Arc::new(RwLock::new(0)),
+            last_ack: Arc::new(RwLock::new(None)),
             sent: Arc::new(RwLock::new(Vec::<UpdateRequest>::new())),
             my_addr: server_addr,
             //Assume that the replica is added to an empty chain
@@ -655,12 +655,18 @@ impl Replica for ReplicaService {
             let last_ack = *last_ack_read;
             drop(last_ack_read);
 
-            //If the ack is too new, wait for all previous acks to complete
-            if ack_xid > last_ack + 1 {
-                sleep(Duration::from_millis(VAR_WAIT)).await;
-            }
-            else {
-                break;
+            match last_ack {
+                //If the ack is too new, wait for all previous acks to complete
+                Some(last_ack_xid) => {
+                    if ack_xid > last_ack_xid + 1 {
+                        sleep(Duration::from_millis(VAR_WAIT)).await;
+                    }
+                    else {
+                        break;
+                    }
+                }
+                //This is the first ack the replica has processed
+                None => break,
             }
         }
 
@@ -697,7 +703,7 @@ impl Replica for ReplicaService {
         });
 
         //Update the last ack processed
-        *last_ack_write = ack_xid;
+        *last_ack_write = Some(ack_xid);
 
         drop(last_ack_write);
         drop(sent_write);
