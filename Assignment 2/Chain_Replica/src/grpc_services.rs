@@ -814,12 +814,18 @@ impl ServerManager {
     }
 
     fn set_head(&mut self, is_head: bool) {
+        #[cfg(debug_assertions)]
+        println!("Setting head state to: {}", is_head);
+
         let mut is_head_write = block_on(self.shared_data.is_head.write());
         *is_head_write = is_head;
         drop(is_head_write);
     }
 
     fn set_tail(&mut self, is_tail: bool) {
+        #[cfg(debug_assertions)]
+        println!("Setting tail state to: {}", is_tail);
+
         let mut is_tail_write = block_on(self.shared_data.is_tail.write());
         *is_tail_write = is_tail;
         drop(is_tail_write);
