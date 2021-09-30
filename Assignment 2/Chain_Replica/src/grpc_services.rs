@@ -512,7 +512,7 @@ impl Replica for ReplicaService {
         let request_ref = request.get_ref();
 
         #[cfg(debug_assertions)]
-        println!("\nReceived StateTransferRequest (xID: {})", request_ref.xid);
+        println!("Received StateTransferRequest (xID: {})\n", request_ref.xid);
 
         let mut new_tail_read = self.shared_data.new_tail.read().await;
         let new_tail = *new_tail_read;
@@ -542,8 +542,13 @@ impl Replica for ReplicaService {
             {
                 println!("Contents of database:");
 
-                for (key, value) in request_ref.state.iter() {
-                    println!("{}: {}", key, value);
+                if request_ref.state.len() == 0 {
+                    println!("None");
+                }
+                else {
+                    for (key, value) in request_ref.state.iter() {
+                        println!("{}: {}", key, value);
+                    }
                 }
             }
         }
@@ -584,7 +589,7 @@ impl Replica for ReplicaService {
 
 
             #[cfg(debug_assertions)]
-            println!("\nForwarding ACKs:");
+            println!("\nForwarded ACKs:");
             let mut num_acks = 0;
 
             //If the predecessor is missing any ACKs, forward them
