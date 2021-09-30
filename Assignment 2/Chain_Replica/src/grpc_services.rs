@@ -661,10 +661,10 @@ impl ServerManager {
     }
     
     pub fn start(&mut self, socket: SocketAddr, pred_addr: Option<String>, succ_addr: Option<String>) {
-        //If there is a predecessor, set new_tail to indicate a state transfer is needed
-        if pred_addr.is_some() {
+        //If there is a predecessor but no successor, set new_tail to indicate a state transfer is needed
+        if pred_addr.is_some() && succ_addr.is_none() {
             let mut new_tail_write = block_on(self.shared_data.new_tail.write());
-            *new_tail_write = false;
+            *new_tail_write = true;
             drop(new_tail_write);
         }
 
