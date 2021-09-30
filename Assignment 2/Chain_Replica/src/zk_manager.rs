@@ -103,7 +103,10 @@ Result<(Option<String>, Option<String>), Box<dyn std::error::Error>> {
         Err(_) => return Err(Error::new(ErrorKind::Other, format!("Failed to get children in znode: {}", &base_path)).into())
     };
 
-    let replica_list = result.as_ref().unwrap();
+    //Get ownership of the children list and sort it
+    let mut replica_list = result.as_ref().unwrap().to_owned();
+    replica_list.sort();
+
     let last_index = replica_list.len() - 1;
     let mut replica_index = 0;
 
