@@ -10,17 +10,17 @@ A proof-of-concept distributed system based on the paper ["Chain Replication for
 
 # Usage
 
-**Start the ZooKeeper Instance**
-Navigate to the repo root directory and run:
+**Start the ZooKeeper Instance**  
+Navigate to the repo root directory and run:  
 `java -jar <ZooKeeper Jar File> server zk_config.cfg`
 
-**Start a Replica Server**
-Navigate to the Chain_Replica folder and run:
+**Start a Replica Server**  
+Navigate to the Chain_Replica folder and run:  
 `cargo run <IP Address> <Root ZNode>`
 
-**Start a Replica Client**
-Navigate to the Chain_Client folder and run:
+**Start a Replica Client**  
+Navigate to the Chain_Client folder and run:  
 `python3 chain_client.py <IP Address> <Root ZNode> <Comamnd> <Args>`
 
-For the list of commands, run:
+For the list of commands, run:  
 `python3 chain_client.py --help`
